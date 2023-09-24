@@ -1,0 +1,107 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <title>CreeP7M</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
+    <!-- Load CreeP7M -->
+    <script src="creep7m.js" data-cp7m-path="openssl"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="row">
+            <div class="col"></div>
+            <div class="col col-xl-6 col-sm-10">
+                <div class="fs-5 p-3 text-center">CreeP7M - p7m utility</div>
+                <div class="text-center p-2 rounded bg-light w-100">
+                    User friendly web-app to extract and verify p7m file<br>
+                    Full offline file process, it never gets uploaded nor shared with external parties<br>
+                    powered by <a href="https://github.com/lestoilfante/CreeP7M" target="_blank">CreeP7M</a> library and OpenSSL embedded wasm module
+                </div>
+                <div class="row p-3">
+                    <div class="input-group mb-3">
+                        <input class="cp7m-input form-control" type="file" accept=".p7m">
+                        <button class="cp7m-extract btn btn-success" type="button">Extract</button>
+                    </div>
+                </div>
+                <div class="row p-3">
+                    <div class="col">
+                        <button class="cp7m-verify mb-1 w-100 btn btn-primary">Verify</button>
+                    </div>
+                    <div class="col">
+                        <button class="cp7m-details mb-1 w-100 btn btn-primary">Details</button>
+                    </div>
+                    <div class="col">
+                        <button class="cp7m-ocsp mb-1 w-100 btn btn-primary">Revocation</button>
+                    </div>
+                </div>
+                <div class="row p-3">
+                    <div id="customOutput" class="w-100 rounded text-break text-center p-2 bg-opacity-75"></div>
+                    <div id="tsp" class="w-100 text-center p-2"></div>
+                    <div id="eventOutput" class="w-100 rounded text-break text-center p-2 bg-opacity-75" style="white-space: pre-wrap;"></div>
+                </div>
+            </div>
+            <div class="col"></div>
+        </div>
+    </div>
+    <!-- Basic inline CreeP7M usage -->
+    <script>
+        //  Initialize with your preferred cors-proxy
+        const CP7M = new CreeP7M(null, 'https://www.itsbalto.com/f/cors-proxy/?apiurl=');
+        // Set your callback
+        CP7M.addEventListener("cp7mOutput", (e) => {
+            console.log(e);
+            const outputElement = document.getElementById('customOutput');
+            outputElement.innerText = '';
+            outputElement.classList.remove('bg-success', 'bg-warning');
+            (e.result.status === 0) ? outputElement.classList.add('bg-success') : outputElement.classList.add('bg-warning');
+            switch (e.subject) {
+                case 'details':
+                    if (e.result.status === 0) {
+                        const filteredIssuer = JSON.stringify(
+                            Object.fromEntries(
+                                Object.entries(e.result.msg.Issuer).filter(([key]) => key !== 'Certs')
+                            ), null, 3);
+                        outputElement.innerText = `* Signer *${JSON.stringify(e.result.msg.Signer, null, 3).slice(1, -1)}\n* Issuer *${filteredIssuer.slice(1, -1)}`;
+                    }
+                    break;
+                case 'verify':
+                    if (e.result.status === 0) {
+                        outputElement.innerText = e.result.err;
+                    }
+                    else
+                        outputElement.innerText = e.result.err.includes(':') ? e.result.err.split(':').pop() : e.result.err;
+                    break;
+                case 'ocsp':
+                    outputElement.innerText = e.result.err;
+                    break;
+            }
+        });
+    </script>
+    <!-- Custom defined handling -->
+    <script>
+        const tsp_cache_date = CP7M.TSP_AGE ? CP7M.TSP_AGE.toLocaleDateString() : '';
+        document.getElementById('tsp').innerText = `Using Trusted Provider from ${CP7M.TSP_SRC}\nupdated ${tsp_cache_date}`;
+        document.getElementsByClassName('cp7m-input')[0].addEventListener('change', async (e) => {
+            const outputElement = document.getElementById('customOutput');
+            outputElement.innerText = '';
+            outputElement.classList.remove('bg-success', 'bg-warning');
+            if (!e.target.files[0])
+                return;
+            let details;
+            const v = await CP7M.verify(false);
+            if (v && v.status === 0) {
+                details = 'Verified\n*revocation not checked*';
+                outputElement.classList.add('bg-success');
+            }
+            else {
+                details = v.err.includes(':') ? v.err.split(':').pop() : v.err;
+                outputElement.classList.add('bg-warning');
+            }
+            const d = await CP7M.getDetails(false);
+            if (d && d.status === 0)
+                details += `\n${d.msg.Signer.CN}\n${d.msg.Signer.SN}\n${d.msg.Signer.OU}\n(${d.msg.Signer.C})\nTimestamp ${d.msg.Signer.Timestamp.toLocaleString()}`;
+            outputElement.innerText = details;
+        })
+    </script>
+</body>
+</html>
