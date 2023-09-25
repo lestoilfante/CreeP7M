@@ -1,4 +1,10 @@
-﻿<!DOCTYPE html>
+﻿<!--
+<copyright>
+    Copyright lestoilfante 2023 (https://github.com/lestoilfante)
+    GNU General Public License version 3 (GPLv3)
+</copyright>
+-->
+<!DOCTYPE html>
 <html>
 <head>
     <title>CreeP7M</title>
@@ -35,6 +41,11 @@
                     </div>
                 </div>
                 <div class="row p-3">
+                    <div class="w-100 text-center">
+                        <div id="customSpinner" class="spinner-border text-primary d-none" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
                     <div id="customOutput" class="w-100 rounded text-break text-center p-2 bg-opacity-75"></div>
                     <div id="tsp" class="w-100 text-center p-2"></div>
                     <div id="eventOutput" class="w-100 rounded text-break text-center p-2 bg-opacity-75" style="white-space: pre-wrap;"></div>
@@ -82,6 +93,8 @@
         const tsp_cache_date = CP7M.TSP_AGE ? CP7M.TSP_AGE.toLocaleDateString() : '';
         document.getElementById('tsp').innerText = `Using Trusted Provider from ${CP7M.TSP_SRC}\nupdated ${tsp_cache_date}`;
         document.getElementsByClassName('cp7m-input')[0].addEventListener('change', async (e) => {
+            const spinner = document.getElementById('customSpinner');
+            spinner.classList.remove('d-none');
             const outputElement = document.getElementById('customOutput');
             outputElement.innerText = '';
             outputElement.classList.remove('bg-success', 'bg-warning');
@@ -89,6 +102,7 @@
                 return;
             let details;
             const v = await CP7M.verify(false);
+            spinner.classList.add('d-none');
             if (v && v.status === 0) {
                 details = 'Verified\n*revocation not checked*';
                 outputElement.classList.add('bg-success');

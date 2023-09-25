@@ -1,4 +1,8 @@
-﻿class CreeP7M {
+﻿//<copyright>
+//    Copyright lestoilfante 2023 (https://github.com/lestoilfante)
+//    GNU General Public License version 3 (GPLv3)
+//</copyright>
+class CreeP7M {
     static #CP7M_ELEMENT; //holds file input element
     static #CP7M_MODULE; //holds a cached WebAssembly module already compiled
     static #FS_PATH = '/Creep/'; //Module FS working path
