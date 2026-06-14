@@ -10,9 +10,9 @@ class CreeP7M {
     static #FS_CA_FILE = CreeP7M.#FS_PATH_CA + 'CA.pem'; //Module FS trusted CA file name
     static #MAIN_INSTANCE; //holds 1st called module instance, inner FS will be shared with subsequent instance through PROXYFS
     static #CORS_PROXY; 
-    static #TSP_SRC = 'https://eidas.ec.europa.eu/efda/api/v2/browse/eidas/tl/tl/IT'; //trusted CA source
+    static #TSP_SRC = 'https://eidas.agid.gov.it/TL/TSL-IT.xml'; //trusted CA source (ETSI TS 119 612 XML)
     static #TSP_PEM; //holds CA.pem contents (string)
-    static #TSP_LIST; //holds CAs 
+    static #TSP_INDEX; //holds issuer certs keyed by ski and dn, built lazily from CA.pem
     static #TSP_CACHE_KEY = 'CP7M_Certificates'; //localStorage key for CA cache
     static #TSP_CACHE_DAYS = 15; //localStorage CA cache expiration
     static #PATH; //path to emscripten wasm module, provided by script attribute "data-cp7m-path"
@@ -191,11 +191,6 @@ class CreeP7M {
                     const details = CreeP7M.parseCertificate(contents);
                     const timestamp = await this.getSignatureTimestamp(false);
                     details.Signer.Timestamp = (timestamp && timestamp.status === 0) ? timestamp.msg : '';
-                    if (details.Issuer.DN) {
-                        details.Issuer.Certs = CreeP7M.#TSP_LIST.providers.filter(x => x.dn === details.Issuer.DN).map(x => x.cert); //NOTE TSP_LIST may have multiple certs with same DN
-                        if (!details.Issuer.Certs.length) //NOTE dn sometimes is differently formatted, try to use SKI if no dn found 
-                            details.Issuer.Certs = CreeP7M.#TSP_LIST.providers.filter(x => x.ski === details.Issuer.SKI).map(x => x.cert);;
-                    }
                     r.msg = details;
                 }
                 else
@@ -235,8 +230,9 @@ class CreeP7M {
         let r = { msg: '', err: '', status: 1000 };
         try {
             const d = await this.getDetails(false);
-            if (d.status === 0 && d.msg.Issuer?.DN && d.msg.Issuer?.OCSP && d.msg.Signer?.Serial && d.msg.Issuer?.Certs?.length) {
-                for (const cert of d.msg.Issuer.Certs) {
+            const issuerCerts = (d.status === 0) ? await this.#issuerCerts(d.msg.Issuer.SKI, d.msg.Issuer.DN) : [];
+            if (d.status === 0 && d.msg.Issuer?.OCSP && d.msg.Signer?.Serial && issuerCerts.length) {
+                for (const cert of issuerCerts) {
                     // Define the URL of the OCSP responder
                     const ocspResponderURL = (CreeP7M.#CORS_PROXY) ? CreeP7M.#CORS_PROXY + d.msg.Issuer.OCSP : d.msg.Issuer.OCSP;
                     const certSerial = d.msg.Signer.Serial;
@@ -360,6 +356,48 @@ class CreeP7M {
 
     #readFile(filePath) {
         return this.#process.FS.readFile(filePath, { encoding: "binary" });
+    }
+
+    // Resolve issuer cert(s) from trusted list, by ski then dn fallback
+    async #issuerCerts(ski, dn) {
+        if (!CreeP7M.#TSP_INDEX)
+            await this.#buildTspIndex();
+        if (!CreeP7M.#TSP_INDEX) return [];
+        if (ski && CreeP7M.#TSP_INDEX.ski[ski]) return CreeP7M.#TSP_INDEX.ski[ski];
+        if (dn && CreeP7M.#TSP_INDEX.dn[dn]) return CreeP7M.#TSP_INDEX.dn[dn];
+        return [];
+    }
+
+    // Parse CA.pem once into a ski/dn keyed index, persist alongside pem cache
+    async #buildTspIndex() {
+        const bundle = CreeP7M.#file('_tsp_bundle.p7b');
+        let instance = await this.#getWasmInstance();
+        if (!instance) return;
+        let r = await this.opensslRun(instance, 'crl2pkcs7 -nocrl -certfile ' + CreeP7M.#FS_CA_FILE + ' -out ' + bundle);
+        if (r.status !== 0) { console.error(r); return; }
+        instance = await this.#getWasmInstance();
+        if (!instance) return;
+        r = await this.opensslRun(instance, 'pkcs7 -in ' + bundle + ' -print_certs -text');
+        instance.FS.unlink(bundle);
+        if (r.status !== 0) { console.error(r); return; }
+        const index = { ski: {}, dn: {} };
+        r.msg.split('-----END CERTIFICATE-----').forEach(chunk => {
+            const pem = chunk.match(/-----BEGIN CERTIFICATE-----([\s\S]*)$/);
+            if (!pem) return;
+            const cert = pem[1].replace(/\s+/g, '');
+            const dnMatch = chunk.match(/Subject:\s*(.*?)\n/);
+            const dn = dnMatch ? dnMatch[1].split(', ').reverse().join(', ') : null; //same format as parsed Issuer.DN
+            const skiMatch = chunk.match(/X509v3 Subject Key Identifier:\s*([0-9A-Fa-f:]+)/);
+            const ski = skiMatch ? skiMatch[1] : null;
+            if (ski) (index.ski[ski] = index.ski[ski] || []).push(cert); //NOTE same key may hold renewed/cross certs
+            if (dn) (index.dn[dn] = index.dn[dn] || []).push(cert);
+        });
+        CreeP7M.#TSP_INDEX = index;
+        const dataStore = JSON.parse(localStorage.getItem(CreeP7M.#TSP_CACHE_KEY));
+        if (dataStore) {
+            dataStore.index = index;
+            localStorage.setItem(CreeP7M.#TSP_CACHE_KEY, JSON.stringify(dataStore));
+        }
     }
 
     static parseCertificate(certString) {
@@ -521,7 +559,7 @@ class CreeP7M {
             // Check if the difference is less than cache period
             if (differenceInDays < CreeP7M.#TSP_CACHE_DAYS) {
                 CreeP7M.#TSP_PEM = dataStore.pem;
-                CreeP7M.#TSP_LIST = dataStore.tsp;
+                CreeP7M.#TSP_INDEX = dataStore.index || null;
                 return;
             }
         }
@@ -530,27 +568,20 @@ class CreeP7M {
         await fetch(tspUrl)
             .then((response) => response.text())
             .then((text) => {
-                const jsonData = JSON.parse(text);
+                const doc = new DOMParser().parseFromString(text, 'application/xml');
+                if (doc.querySelector('parsererror'))
+                    throw new Error('TSL XML parse error');
                 var pemCertificates = '';
-                const tspList = { providers: [] };
-                jsonData.serviceProviders.forEach(provider => {
-                    provider.services.forEach(service => {
-                        service.digitalIdentity.certificates.forEach(certificate => {
-                            if (certificate.base64 && certificate.subject) {
-                                tspList.providers.push({
-                                    dn: certificate.subject,
-                                    cert: certificate.base64,
-                                    //store key identifier as hex in same format of openssl parsed value
-                                    ski: (certificate.skiB64) ? Array.from(atob(certificate.skiB64), byte => byte.charCodeAt(0).toString(16).padStart(2, '0')).join(':').toUpperCase() : null
-                                })
-                                pemCertificates += `-----BEGIN CERTIFICATE-----\n${certificate.base64}\n-----END CERTIFICATE-----\n`;
-                            }
-                        });
+                // only certs bound to a TSP service, skip scheme operator and TL signature
+                Array.from(doc.getElementsByTagNameNS('*', 'ServiceInformation')).forEach(service => {
+                    Array.from(service.getElementsByTagNameNS('*', 'X509Certificate')).forEach(cert => {
+                        const base64 = cert.textContent.replace(/\s+/g, '');
+                        if (base64)
+                            pemCertificates += `-----BEGIN CERTIFICATE-----\n${base64}\n-----END CERTIFICATE-----\n`;
                     });
                 });
                 CreeP7M.#TSP_PEM = pemCertificates;
-                CreeP7M.#TSP_LIST = tspList;
-                const dataStore = JSON.stringify({ date: new Date(), pem: pemCertificates, tsp: tspList });
+                const dataStore = JSON.stringify({ date: new Date(), pem: pemCertificates });
                 // Store the JSON string in local storage
                 localStorage.setItem(CreeP7M.#TSP_CACHE_KEY, dataStore);
             }).catch(function (e) {
