@@ -47,7 +47,7 @@ CP7M.addEventListener("cp7mOutput", (e) => console.log(e));
 By default each method fires an event, you can override this behavior by
 calling it with <mark>false</mark>
 ```javascript
-const verifyResult = await CP7M(false);
+const verifyResult = await CP7M.verify(false);
 ```
 ## Build OpenSSL to WebAssembly
 A prebuilt binary is already provided but you can build your own
