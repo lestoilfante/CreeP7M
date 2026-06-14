@@ -50,21 +50,22 @@ calling it with <mark>false</mark>
 const verifyResult = await CP7M.verify(false);
 ```
 ## Build OpenSSL to WebAssembly
-A prebuilt binary is already provided but you can build your own
+A prebuilt binary is already provided but you can build your own.\
+The GitHub Actions workflow `.github/workflows/build-openssl.yml` rebuilds it (emsdk 4.0.23, openssl-3.5 by default) and opens a PR with the result. Manual steps below.
 ### Download and prepare Emscripten environment
 git clone https://github.com/emscripten-core/emsdk.git \
 cd emsdk \
-./emsdk install latest \
-./emsdk activate latest \
+./emsdk install 4.0.23 \
+./emsdk activate 4.0.23 \
 source ./emsdk_env.sh \
 export CC=emcc \
 export CXX=emcc
 ### Build OpenSSL
-git clone -b openssl-3.0 https://github.com/openssl/openssl.git \
+git clone -b openssl-3.5 https://github.com/openssl/openssl.git \
 cd openssl \
 emconfigure ./Configure no-hw no-shared no-asm no-threads no-ssl3 no-dtls no-engine no-dso linux-x32 -static \
 sed -i 's/$(CROSS_COMPILE)//' Makefile \
-emmake make -j 16 build_generated libssl.a libcrypto.a apps/openssl CFLAGS="-O2 -s ENVIRONMENT='web' -s FILESYSTEM=1 -s MODULARIZE=1 -s EXPORTED_RUNTIME_METHODS=\"['callMain', 'FS', 'TTY']\" -s INVOKE_RUN=0 -s EXIT_RUNTIME=1 -s EXPORT_ES6=0 -s EXPORT_NAME='CreeP7M_openssl' -s USE_ES6_IMPORT_META=0 -s ALLOW_MEMORY_GROWTH=1 -l proxyfs.js"
+emmake make -j 16 build_generated libssl.a libcrypto.a apps/openssl CFLAGS="-O2 -s ENVIRONMENT='web' -s FILESYSTEM=1 -s MODULARIZE=1 -s EXPORTED_RUNTIME_METHODS=\"['callMain', 'FS', 'TTY']\" -s INVOKE_RUN=0 -s EXIT_RUNTIME=1 -s EXPORT_ES6=0 -s EXPORT_NAME='CreeP7M_openssl' -s ALLOW_MEMORY_GROWTH=1 -l proxyfs.js"
 
 ## A small dive into p7m background
 ### EU Trust chain
