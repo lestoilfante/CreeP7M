@@ -43,7 +43,7 @@ jobs:
         working-directory: ${{ runner.temp }}/openssl
         run: |
           emmake make -j$(nproc) build_generated libssl.a libcrypto.a apps/openssl \
-            CFLAGS="-O2 -s ENVIRONMENT='web' -s FILESYSTEM=1 -s MODULARIZE=1 -s EXPORTED_RUNTIME_METHODS=\"['callMain', 'FS', 'TTY']\" -s INVOKE_RUN=0 -s EXIT_RUNTIME=1 -s EXPORT_ES6=0 -s EXPORT_NAME='CreeP7M_openssl' -s USE_ES6_IMPORT_META=0 -s ALLOW_MEMORY_GROWTH=1 -l proxyfs.js"
+            CFLAGS="-O2 -s ENVIRONMENT='web' -s FILESYSTEM=1 -s MODULARIZE=1 -s EXPORTED_RUNTIME_METHODS=\"['callMain', 'FS', 'TTY']\" -s INVOKE_RUN=0 -s EXIT_RUNTIME=1 -s EXPORT_ES6=0 -s EXPORT_NAME='CreeP7M_openssl' -s ALLOW_MEMORY_GROWTH=1 -l proxyfs.js"
 
       - name: Stage binaries
         id: stage
