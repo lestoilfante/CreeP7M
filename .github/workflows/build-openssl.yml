@@ -11,7 +11,7 @@ on:
         required: true
       emsdk_version:
         description: Emscripten SDK version (pin for reproducibility)
-        default: 3.1.74
+        default: 4.0.23
         required: true
 
 permissions:
@@ -23,10 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Setup Emscripten
-        uses: mymindstorm/setup-emsdk@v14
+        uses: emscripten-core/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
         with:
           version: ${{ inputs.emsdk_version }}
 
@@ -57,22 +57,30 @@ jobs:
             echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } | tee CreeP7M/openssl/BUILDINFO.txt >> "$GITHUB_OUTPUT"
 
-      - name: Create pull request
-        uses: peter-evans/create-pull-request@v7
-        with:
-          branch: ci/openssl-build
-          title: "rebuild openssl.wasm (${{ inputs.openssl_branch }})"
-          commit-message: "rebuild openssl.wasm from ${{ inputs.openssl_branch }}"
-          add-paths: CreeP7M/openssl
-          body: |
-            Automated OpenSSL WebAssembly rebuild.
-
-            - openssl branch: `${{ steps.stage.outputs.openssl_branch }}`
-            - openssl commit: `${{ steps.stage.outputs.openssl_commit }}`
-            - ${{ steps.stage.outputs.emcc_version }}
-            - built at: ${{ steps.stage.outputs.built_at }}
-
-            > [!WARNING]
-            > The binary is not exercised in CI. Load `examples/CreeP7M.html`,
-            > clear the cache, and verify a p7m (extract / verify / details /
-            > revocation) before merging.
+      - name: Open pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENSSL_BRANCH: ${{ inputs.openssl_branch }}
+          OPENSSL_COMMIT: ${{ steps.stage.outputs.openssl_commit }}
+          EMCC_VERSION: ${{ steps.stage.outputs.emcc_version }}
+          BUILT_AT: ${{ steps.stage.outputs.built_at }}
+        run: |
+          branch="ci/openssl-build-${{ github.run_id }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add CreeP7M/openssl
+          git commit -m "rebuild openssl.wasm from ${OPENSSL_BRANCH}"
+          git push -u origin "$branch"
+          gh pr create --base "${{ github.ref_name }}" --head "$branch" \
+            --title "rebuild openssl.wasm (${OPENSSL_BRANCH})" \
+            --body "$(printf '%s\n' \
+              'Automated OpenSSL WebAssembly rebuild.' \
+              '' \
+              "- openssl branch: ${OPENSSL_BRANCH}" \
+              "- openssl commit: ${OPENSSL_COMMIT}" \
+              "- ${EMCC_VERSION}" \
+              "- built at: ${BUILT_AT}" \
+              '' \
+              '> [!WARNING]' \
+              '> Binary is not exercised in CI. Load examples/CreeP7M.html, clear the cache, and verify a p7m (extract / verify / details / revocation) before merging.')"
