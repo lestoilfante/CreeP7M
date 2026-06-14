@@ -1,0 +1,78 @@
+# Rebuild the embedded OpenSSL WebAssembly module (openssl.js + openssl.wasm)
+# Manual trigger only; result is delivered as a pull request for review.
+name: Build OpenSSL WebAssembly
+
+on:
+  workflow_dispatch:
+    inputs:
+      openssl_branch:
+        description: OpenSSL git branch/tag to build (current LTS = openssl-3.5)
+        default: openssl-3.5
+        required: true
+      emsdk_version:
+        description: Emscripten SDK version (pin for reproducibility)
+        default: 3.1.74
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ inputs.emsdk_version }}
+
+      - name: Clone OpenSSL
+        run: git clone --depth 1 -b "${{ inputs.openssl_branch }}" https://github.com/openssl/openssl.git "${{ runner.temp }}/openssl"
+
+      - name: Configure
+        working-directory: ${{ runner.temp }}/openssl
+        run: |
+          emconfigure ./Configure no-hw no-shared no-asm no-threads no-ssl3 no-dtls no-engine no-dso linux-x32 -static
+          sed -i 's/$(CROSS_COMPILE)//' Makefile
+
+      - name: Build
+        working-directory: ${{ runner.temp }}/openssl
+        run: |
+          emmake make -j$(nproc) build_generated libssl.a libcrypto.a apps/openssl \
+            CFLAGS="-O2 -s ENVIRONMENT='web' -s FILESYSTEM=1 -s MODULARIZE=1 -s EXPORTED_RUNTIME_METHODS=\"['callMain', 'FS', 'TTY']\" -s INVOKE_RUN=0 -s EXIT_RUNTIME=1 -s EXPORT_ES6=0 -s EXPORT_NAME='CreeP7M_openssl' -s USE_ES6_IMPORT_META=0 -s ALLOW_MEMORY_GROWTH=1 -l proxyfs.js"
+
+      - name: Stage binaries
+        id: stage
+        run: |
+          cp "${{ runner.temp }}/openssl/apps/openssl" CreeP7M/openssl/openssl.js
+          cp "${{ runner.temp }}/openssl/apps/openssl.wasm" CreeP7M/openssl/openssl.wasm
+          {
+            echo "openssl_branch=${{ inputs.openssl_branch }}"
+            echo "openssl_commit=$(git -C "${{ runner.temp }}/openssl" rev-parse HEAD)"
+            echo "emcc_version=$(emcc --version | head -1)"
+            echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } | tee CreeP7M/openssl/BUILDINFO.txt >> "$GITHUB_OUTPUT"
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: ci/openssl-build
+          title: "rebuild openssl.wasm (${{ inputs.openssl_branch }})"
+          commit-message: "rebuild openssl.wasm from ${{ inputs.openssl_branch }}"
+          add-paths: CreeP7M/openssl
+          body: |
+            Automated OpenSSL WebAssembly rebuild.
+
+            - openssl branch: `${{ steps.stage.outputs.openssl_branch }}`
+            - openssl commit: `${{ steps.stage.outputs.openssl_commit }}`
+            - ${{ steps.stage.outputs.emcc_version }}
+            - built at: ${{ steps.stage.outputs.built_at }}
+
+            > [!WARNING]
+            > The binary is not exercised in CI. Load `examples/CreeP7M.html`,
+            > clear the cache, and verify a p7m (extract / verify / details /
+            > revocation) before merging.
