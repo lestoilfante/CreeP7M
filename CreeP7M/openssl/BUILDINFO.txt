@@ -1,0 +1,4 @@
+openssl_branch=openssl-3.5
+openssl_commit=23b03960e099e26226546018bcedd02028988cc1
+emcc_version=emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 4.0.23 (7a5d93b50f6a3a35e85a0d2fc9e667b8498e6aed)
+built_at=2026-06-14T20:31:58Z
