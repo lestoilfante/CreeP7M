@@ -25,7 +25,7 @@ a soft requirement
 ```javascript
 const CP7M = new CreeP7M(null, 'https://www.itsbalto.com/f/cors-proxy/?apiurl=');
 ```
-If not provided we use TLP from https://eidas.ec.europa.eu/efda/tl-browser/api/v1/browser/tl/IT
+If not provided we use TLP from https://eidas.agid.gov.it/TL/TSL-IT.xml
 ### Default bindings
 By default CreeP7M listen for 'click' events on elements with below classes
  exposing almost all methods
