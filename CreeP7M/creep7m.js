@@ -10,7 +10,7 @@ class CreeP7M {
     static #FS_CA_FILE = CreeP7M.#FS_PATH_CA + 'CA.pem'; //Module FS trusted CA file name
     static #MAIN_INSTANCE; //holds 1st called module instance, inner FS will be shared with subsequent instance through PROXYFS
     static #CORS_PROXY; 
-    static #TSP_SRC = 'https://eidas.ec.europa.eu/efda/tl-browser/api/v1/browser/tl/IT'; //trusted CA source
+    static #TSP_SRC = 'https://eidas.ec.europa.eu/efda/api/v2/browse/eidas/tl/tl/IT'; //trusted CA source
     static #TSP_PEM; //holds CA.pem contents (string)
     static #TSP_LIST; //holds CAs 
     static #TSP_CACHE_KEY = 'CP7M_Certificates'; //localStorage key for CA cache
