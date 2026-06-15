@@ -1,5 +1,5 @@
-﻿//<copyright>
-//    Copyright lestoilfante 2023 (https://github.com/lestoilfante)
+//<copyright>
+//    Copyright lestoilfante 2023-2026 (https://github.com/lestoilfante)
 //    GNU General Public License version 3 (GPLv3)
 //</copyright>
 class CreeP7M {
@@ -39,7 +39,7 @@ class CreeP7M {
     #eventListeners = {};
 
     constructor(caSourceUrl, corsProxyUrl) {
-        const el = document.querySelector('.cp7m-input');
+        const el = document.querySelector(CreeP7M.#UIBINDINGS.INPUT);
         if (!CreeP7M.#CP7M_ELEMENT && el) {
             CreeP7M.#CP7M_ELEMENT = el;
             // Parse URL args
@@ -123,8 +123,7 @@ class CreeP7M {
         return this.#process;
     }
 
-    //
-    async opensslRun(moduleInstance, argsString) {
+    async #opensslRun(moduleInstance, argsString) {
         //NOTE openssl result message is always written to stderr
         this.#output.msg = '';
         this.#output.err = '';
@@ -144,7 +143,7 @@ class CreeP7M {
             if (fileIn) {
                 const fileOutName = this.fileInput.name.replace(/\.p7m$/i, '');
                 const fileOutFullPath = CreeP7M.#file(fileOutName);
-                r = await this.opensslRun(instance, 'cms -inform DER -in ' + CreeP7M.#file(this.fileInput.name) + ' -verify -noverify -binary -out ' + fileOutFullPath);
+                r = await this.#opensslRun(instance, 'cms -inform DER -in ' + CreeP7M.#file(this.fileInput.name) + ' -verify -noverify -binary -out ' + fileOutFullPath);
                 if (r.status === 0) {
                     const fileOut = this.#readFile(fileOutFullPath);
                     CreeP7M.#sendFileToBrowser(fileOut, fileOutName);
@@ -166,7 +165,7 @@ class CreeP7M {
             if (fileIn) {
                 const timestamp = await this.getSignatureTimestamp(false);
                 const validAtTime = (timestamp && timestamp.status === 0) ? Math.floor(timestamp.msg.getTime() / 1000) : Math.floor(Date.now() / 1000);
-                r = await this.opensslRun(instance, 'cms -inform DER -in ' + CreeP7M.#file(this.fileInput.name) + ' -verify -attime ' + validAtTime + ' -out -noout -CAfile ' + CreeP7M.#FS_CA_FILE);
+                r = await this.#opensslRun(instance, 'cms -inform DER -in ' + CreeP7M.#file(this.fileInput.name) + ' -verify -attime ' + validAtTime + ' -out -noout -CAfile ' + CreeP7M.#FS_CA_FILE);
                 if (r.status !== 0) {
                     console.error(r);
                 }
@@ -185,10 +184,10 @@ class CreeP7M {
             const fileIn = await this.#sendToFSifNotExists(this.fileInput);
             if (fileIn) {
                 const certFile = CreeP7M.#file(this.fileInput.name + '.pem');
-                r = await this.opensslRun(instance, 'pkcs7 -inform DER -in ' + CreeP7M.#file(this.fileInput.name) + ' -print_certs -text -out ' + certFile);
+                r = await this.#opensslRun(instance, 'pkcs7 -inform DER -in ' + CreeP7M.#file(this.fileInput.name) + ' -print_certs -text -out ' + certFile);
                 if (r.status === 0) {
                     const contents = instance.FS.readFile(certFile, { encoding: 'utf8' });
-                    const details = CreeP7M.parseCertificate(contents);
+                    const details = CreeP7M.#parseCertificate(contents);
                     const timestamp = await this.getSignatureTimestamp(false);
                     details.Signer.Timestamp = (timestamp && timestamp.status === 0) ? timestamp.msg : '';
                     r.msg = details;
@@ -209,10 +208,10 @@ class CreeP7M {
         if (instance) {
             const fileIn = await this.#sendToFSifNotExists(this.fileInput);
             if (fileIn) {
-                r = await this.opensslRun(instance, 'asn1parse -inform DER -dlimit 1 -in ' + CreeP7M.#file(this.fileInput.name));
+                r = await this.#opensslRun(instance, 'asn1parse -inform DER -dlimit 1 -in ' + CreeP7M.#file(this.fileInput.name));
                 if (r.status === 0) {
                     const timestampMatch = r.msg.match(/OBJECT\s+:signingTime.*?UTCTIME\s+:(\d*Z)/s);
-                    const timestamp = timestampMatch ? CreeP7M.utctimeToDate(timestampMatch[1]) : null;
+                    const timestamp = timestampMatch ? CreeP7M.#utctimeToDate(timestampMatch[1]) : null;
                     r.msg = timestamp;
                 }
                 else
@@ -243,7 +242,7 @@ class CreeP7M {
                         instanceOcspReq.FS.writeFile(tspCertFile, certPem);
                         const ocspReq = CreeP7M.#file(this.fileInput.name + '.ocsp-req.der');
                         // Create an offline ocsp request and save it to file
-                        const x = await this.opensslRun(instanceOcspReq, 'ocsp -nonce -issuer ' + tspCertFile + ' -serial ' + certSerial + ' -reqout ' + ocspReq);
+                        const x = await this.#opensslRun(instanceOcspReq, 'ocsp -nonce -issuer ' + tspCertFile + ' -serial ' + certSerial + ' -reqout ' + ocspReq);
                         if (x.status !== 0)
                             throw new Error(x.err);
                         const ocspReqFile = this.#readFile(ocspReq);
@@ -265,7 +264,7 @@ class CreeP7M {
                         const instanceOcspVerify = await this.#getWasmInstance();
                         if (instanceOcspVerify) {
                             // Process the OCSP response
-                            const y = await this.opensslRun(instanceOcspVerify, 'ocsp -reqin ' + ocspReq + ' -respin ' + ocspRes + ' -CAfile ' + CreeP7M.#FS_CA_FILE);
+                            const y = await this.#opensslRun(instanceOcspVerify, 'ocsp -reqin ' + ocspReq + ' -respin ' + ocspRes + ' -CAfile ' + CreeP7M.#FS_CA_FILE);
                             if (y.status !== 0)
                                 throw new Error(y.err);
                             r = y;
@@ -293,7 +292,7 @@ class CreeP7M {
         if (instance) {
             const fileIn = await this.#sendToFSifNotExists(this.fileInput);
             if (fileIn) {
-                r = await this.opensslRun(instance, 'asn1parse -i -inform DER -dlimit 1 -in ' + CreeP7M.#file(this.fileInput.name));
+                r = await this.#opensslRun(instance, 'asn1parse -i -inform DER -dlimit 1 -in ' + CreeP7M.#file(this.fileInput.name));
             }
         }
         const _ = { ...r };
@@ -373,11 +372,11 @@ class CreeP7M {
         const bundle = CreeP7M.#file('_tsp_bundle.p7b');
         let instance = await this.#getWasmInstance();
         if (!instance) return;
-        let r = await this.opensslRun(instance, 'crl2pkcs7 -nocrl -certfile ' + CreeP7M.#FS_CA_FILE + ' -out ' + bundle);
+        let r = await this.#opensslRun(instance, 'crl2pkcs7 -nocrl -certfile ' + CreeP7M.#FS_CA_FILE + ' -out ' + bundle);
         if (r.status !== 0) { console.error(r); return; }
         instance = await this.#getWasmInstance();
         if (!instance) return;
-        r = await this.opensslRun(instance, 'pkcs7 -in ' + bundle + ' -print_certs -text');
+        r = await this.#opensslRun(instance, 'pkcs7 -in ' + bundle + ' -print_certs -text');
         instance.FS.unlink(bundle);
         if (r.status !== 0) { console.error(r); return; }
         const index = { ski: {}, dn: {} };
@@ -400,7 +399,7 @@ class CreeP7M {
         }
     }
 
-    static parseCertificate(certString) {
+    static #parseCertificate(certString) {
         //(C)
         const countryMatch = certString.match(/Subject:.*?C=([^\/,]*)/);
         const country = countryMatch ? countryMatch[1].replace(/^.*:/, '') : '';
@@ -460,7 +459,7 @@ class CreeP7M {
         return output;
     }
 
-    static utctimeToDate(utctime) {
+    static #utctimeToDate(utctime) {
         // Assuming that 00-49 represents 2000-2049 and 50-99 represents 1950-1999
         const yearPrefix = parseInt(utctime.slice(0, 2), 10);
         const year = yearPrefix < 50 ? 2000 + yearPrefix : 1900 + yearPrefix;
@@ -563,10 +562,16 @@ class CreeP7M {
                 return;
             }
         }
-        // Get a new list
-        const tspUrl = (CreeP7M.#CORS_PROXY) ? CreeP7M.#CORS_PROXY + CreeP7M.#TSP_SRC : CreeP7M.#TSP_SRC;
-        await fetch(tspUrl)
-            .then((response) => response.text())
+        // Get a new list: fetch direct first, cors-proxy only as fallback
+        // (a self-hosted or CORS-enabled list needs no proxy; OCSP still uses it)
+        let response = await fetch(CreeP7M.#TSP_SRC).catch(() => null);
+        if ((!response || !response.ok) && CreeP7M.#CORS_PROXY)
+            response = await fetch(CreeP7M.#CORS_PROXY + CreeP7M.#TSP_SRC).catch(() => null);
+        if (!response || !response.ok) {
+            console.error('Error fetching CA');
+            return;
+        }
+        await response.text()
             .then((text) => {
                 const doc = new DOMParser().parseFromString(text, 'application/xml');
                 if (doc.querySelector('parsererror'))
