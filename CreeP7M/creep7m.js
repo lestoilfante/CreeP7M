@@ -30,6 +30,7 @@ class CreeP7M {
         DETAILS: 'details',
         TIMESTAMP: 'timestamp',
         OCSP: 'ocsp',
+        SIGNATURES: 'signatures',
         DEBUG: 'debug'
     }
 
@@ -223,6 +224,27 @@ class CreeP7M {
         return _;
     }
     //
+    async signatureCount(event = true) {
+        if (!this.fileInput) return;
+        let r;
+        const instance = await this.#getWasmInstance();
+        if (instance) {
+            const fileIn = await this.#sendToFSifNotExists(this.fileInput);
+            if (fileIn) {
+                r = await this.#opensslRun(instance, 'cms -inform DER -in ' + CreeP7M.#file(this.fileInput.name) + ' -cmsout -print -noout');
+                if (r.status === 0) {
+                    // count parallel signers (one sid per SignerInfo), payload/nested signatures not peeled
+                    r.msg = (r.msg.match(/d\.(issuerAndSerialNumber|subjectKeyIdentifier):/g) || []).length;
+                }
+                else
+                    console.error(r);
+            }
+        }
+        const _ = { ...r };
+        if (event) this.#sendOutput(_, CreeP7M.#EVENT.SIGNATURES);
+        return _;
+    }
+    //
     async ocspVerify(event = true) {
         if (!this.fileInput) return;
         // since emscripten wasm binary has very limited network access we use openssl offline ocsp verification + fetch
@@ -234,7 +256,7 @@ class CreeP7M {
                 for (const cert of issuerCerts) {
                     // Define the URL of the OCSP responder
                     const ocspResponderURL = (CreeP7M.#CORS_PROXY) ? CreeP7M.#CORS_PROXY + d.msg.Issuer.OCSP : d.msg.Issuer.OCSP;
-                    const certSerial = d.msg.Signer.Serial;
+                    const certSerial = `0x${d.msg.Signer.Serial}`;
                     const instanceOcspReq = await this.#getWasmInstance();
                     if (instanceOcspReq) {
                         const certPem = `-----BEGIN CERTIFICATE-----\n${cert}\n-----END CERTIFICATE-----\n`;
@@ -285,18 +307,21 @@ class CreeP7M {
         return _;
     }
     //
-    async debugP7M() {
+    async debugP7M(command = 'asn1parse -i -inform DER -dlimit 1', event = true) {
         if (!this.fileInput) return;
         let r = { msg: '', err: '', status: 1000 };
         const instance = await this.#getWasmInstance();
         if (instance) {
             const fileIn = await this.#sendToFSifNotExists(this.fileInput);
             if (fileIn) {
-                r = await this.#opensslRun(instance, 'asn1parse -i -inform DER -dlimit 1 -in ' + CreeP7M.#file(this.fileInput.name));
+                // drop caller -in/-out (and their values) to keep the virtual FS safe, force -in on current file
+                const args = command.split(' ').filter((tok, i, a) => tok !== '-in' && tok !== '-out' && a[i - 1] !== '-in' && a[i - 1] !== '-out');
+                args.push('-in', CreeP7M.#file(this.fileInput.name));
+                r = await this.#opensslRun(instance, args.join(' '));
             }
         }
         const _ = { ...r };
-        this.#sendOutput(_, CreeP7M.#EVENT.DEBUG);
+        if (event) this.#sendOutput(_, CreeP7M.#EVENT.DEBUG);
         return _;
     }
 
@@ -416,9 +441,8 @@ class CreeP7M {
         const emailMatch = certString.match(/X509v3 Subject Alternative Name:\s+email:([^\s]+)/);
         const email = emailMatch ? emailMatch[1] : '';
         //(Certificate SN)
-        const certSnMatch = certString.match(/Serial Number:\s.*?([0-9a-fA-F:]+)\s/);
-        const certSnHex = certSnMatch ? certSnMatch[1].replace(/:/g, '') : '';
-        const certSnDecimal = BigInt(`0x${certSnHex}`).toString();
+        const certSnMatch = certString.match(/Serial Number:\s.*?0x([0-9a-fA-F]+)/);
+        const certSnHex = certSnMatch ? certSnMatch[1].toUpperCase() : '';
         //(Certificate Validity Dates)
         const notBeforeMatch = certString.match(/Not Before\s*:\s*(.*)/);
         const notBefore = notBeforeMatch ? notBeforeMatch[1] : '';
@@ -444,7 +468,7 @@ class CreeP7M {
                 CN: cn,
                 SN: cf,
                 Contact: email,
-                Serial: certSnDecimal,
+                Serial: certSnHex,
                 NotBefore: notBefore,
                 NotAfter: notAfter
             },

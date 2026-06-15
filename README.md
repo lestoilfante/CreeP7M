@@ -1,4 +1,4 @@
-﻿# CreeP7M
+# CreeP7M
 Small JS library for p7m offline file handling: 
 + extract 
 + verify
@@ -11,11 +11,11 @@ Under the hood is powered by full featured OpenSSL v3 compiled to WebAssembly.\
 Indeed CreeP7M don't use any custom made WebAssembly program or library, just "plain" OpenSSL CLI commands!
 
 ## How to
-Use <mark>data-cp7m-path</mark> to pass openssl wasm binary path
+Use `data-cp7m-path` to pass openssl wasm binary path
 ```javascript
 <script src="creep7m.js" data-cp7m-path="openssl"></script>
 ```
-Define your file input with class <mark>cp7m-input</mark>
+Define your file input with class `cp7m-input`
 ```
 <input class="cp7m-input" type="file" accept=".p7m">
 ```
@@ -25,7 +25,10 @@ a soft requirement
 ```javascript
 const CP7M = new CreeP7M(null, 'https://www.itsbalto.com/f/cors-proxy/?apiurl=');
 ```
-If not provided we use TLP from https://eidas.agid.gov.it/TL/TSL-IT.xml
+If not provided we use TLP from https://eidas.agid.gov.it/TL/TSL-IT.xml \
+The Trusted List source must be an ETSI TS 119 612 XML list.\
+A full working example is in [examples](examples/CreeP7M.html)
+
 ### Default bindings
 By default CreeP7M listen for 'click' events on elements with below classes
  exposing almost all methods
@@ -39,16 +42,66 @@ By default CreeP7M listen for 'click' events on elements with below classes
 | cp7m-ocsp      | OCSP validation against Issuer ocsp responder |
 | cp7m-cacheClear| Clear TSP list from default 15 days localStorage cache |
 
+### Methods
+All methods are async and resolve to a result object (see below).
+Each fires a `cp7mOutput` event; on verify/getDetails/getSignatureTimestamp/ocspVerify
+you can pass `false` to skip it.
+
+| Method | result.msg | Action |
+| ------ | ---------- | ------ |
+| extract() | - | extract payload and download it |
+| verify(event) | openssl output | verify authenticity and timestamp validity against TSP list |
+| getDetails(event) | details object | Signer and Issuer details |
+| getSignatureTimestamp(event) | Date | signing time taken from the signature |
+| ocspVerify(event) | openssl output | OCSP revocation check against Issuer responder |
+| debugP7M(command, event) | openssl output | run any openssl command against the loaded file (caller `-in`/`-out` stripped, `-in` forced on it); defaults to an asn1parse dump |
+| CreeP7M.cacheClear() | - | clear cached TSP list (static; reload page for a fresh fetch) |
+
+### Result
+Every method resolves to
+```javascript
+{ msg, err, status }
+```
++ `status` 0 means success
++ NOTE openssl writes its result message to `err` (stderr), not msg
++ verify / ocspVerify: msg and err are strings
++ getSignatureTimestamp: msg is a Date
++ getDetails: msg is an object
+```javascript
+{
+    Signer: { C, OU, CN, SN, Contact, Serial, NotBefore, NotAfter, Timestamp },
+    Issuer: { DN, SKI, CRL, OCSP }
+}
+```
+
+### Getters
+| Getter | Value |
+| ------ | ----- |
+| fileInput | currently selected File, or null |
+| TSP_SRC | Trusted List source url in use |
+| TSP_AGE | Date the cached TSP list was stored, or null |
+
 ### Events
 Basic usage
 ```javascript
 CP7M.addEventListener("cp7mOutput", (e) => console.log(e));
 ```
+The event payload is
+```javascript
+{ result, subject }
+```
+where `result` is the result object above and `subject` is one of
+extract | verify | details | timestamp | ocsp | debug \
 By default each method fires an event, you can override this behavior by
-calling it with <mark>false</mark>
+calling it with `false`
 ```javascript
 const verifyResult = await CP7M.verify(false);
 ```
+
+### Notes
++ Only the first `new CreeP7M()` wires things up, later instances are no-ops while one is active; state is shared
++ When set, the cors-proxy is only a fallback for the Trusted List fetch (always used for OCSP).
+
 ## Build OpenSSL to WebAssembly
 A prebuilt binary is already provided but you can build your own.\
 The GitHub Actions workflow `.github/workflows/build-openssl.yml` rebuilds it (emsdk 4.0.23, openssl-3.5 by default) and opens a PR with the result. Manual steps below.
@@ -82,6 +135,12 @@ https://quoll.it/firma-digitale-p7m-come-estrarre-il-contenuto/ \
 
 ## Useful links
 https://github.com/emscripten-core/emscripten/blob/main/src/settings.js \
-https://www.openssl.org/docs/man3.0/man1/openssl-cms.html \
+https://www.openssl.org/docs/man3.5/man1/openssl-cms.html \
 https://www.agid.gov.it/it/piattaforme/firma-elettronica-qualificata/software-verifica \
 https://github.com/esig/dss/blob/master/dss-cookbook/src/main/asciidoc/_chapters/eSignatures-and-dss.adoc#TrustedLists
+
+## License & Copyright
+[Copyright 2023-2026 lestoilfante](https://github.com/lestoilfante)
+
+GNU General Public License version 3 (GPLv3)
+
