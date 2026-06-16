@@ -49,11 +49,14 @@ you can pass `false` to skip it.
 
 | Method | result.msg | Action |
 | ------ | ---------- | ------ |
-| extract() | - | extract payload and download it |
-| verify(event) | openssl output | verify authenticity and timestamp validity against TSP list |
-| getDetails(event) | details object | Signer and Issuer details |
-| getSignatureTimestamp(event) | Date | signing time taken from the signature |
-| ocspVerify(event) | openssl output | OCSP revocation check against Issuer responder |
+| extract() | layer count | peel every signature layer, download the innermost payload |
+| verify(event) | per-layer results | verify each layer at its own signing time against TSP list |
+| getDetails(event) | signer array | Signer and Issuer details, one entry per signer across all layers |
+| getSignatureTimestamp(event) | Date array | signing time per signer |
+| signatureCount(event) | number | total signers across all layers |
+| ocspVerify(event) | per-signer results | OCSP revocation check for each signer |
+| buildTspIndex() | index | build/warm the trusted-list issuer index; call before getDetails() to populate issuer serial/validity |
+| CreeP7M.describeServiceType(uri) | label | static; human label for an ETSI service type URI (e.g. `…/CA/QC` → "Qualified certificate CA") |
 | debugP7M(command, event) | openssl output | run any openssl command against the loaded file (caller `-in`/`-out` stripped, `-in` forced on it); defaults to an asn1parse dump |
 | CreeP7M.cacheClear() | - | clear cached TSP list (static; reload page for a fresh fetch) |
 
@@ -62,17 +65,22 @@ Every method resolves to
 ```javascript
 { msg, err, status }
 ```
-+ `status` 0 means success
++ `status` 0 means success (verify/ocspVerify: only if every layer/signer succeeded)
 + NOTE openssl writes its result message to `err` (stderr), not msg
-+ verify / ocspVerify: msg and err are strings
-+ getSignatureTimestamp: msg is a Date
-+ getDetails: msg is an object
++ nested ("matrioska") signatures are peeled automatically; results cover every layer, tagged with `depth` (0 = outermost)
++ getDetails: msg is an array, one entry per signer
 ```javascript
-{
-    Signer: { C, OU, CN, SN, Contact, Serial, NotBefore, NotAfter, Timestamp },
-    Issuer: { DN, SKI, CRL, OCSP }
-}
+[{
+    depth,
+    Signer: { C, OU, CN, SN, Contact, Serial, NotBefore, NotAfter },
+    Issuer: { DN, SKI, CRL, OCSP, Serial, NotBefore, NotAfter, ServiceTypes },
+    Timestamp
+}]
 ```
++ Issuer `Serial`/`NotBefore`/`NotAfter`/`ServiceTypes` come from the trusted-list index and are `null` unless it is warm; call `buildTspIndex()` (or run `ocspVerify()`) first to populate them. `ServiceTypes` is the ETSI service type URI(s) the issuer is listed under (e.g. `…/Svctype/CA/QC`)
++ getSignatureTimestamp: msg is an array of Date, one per signer
++ signatureCount: msg is the total signer count
++ verify / ocspVerify: msg is a per-layer / per-signer array `[{ depth, status, err }]`
 
 ### Getters
 | Getter | Value |
@@ -91,7 +99,7 @@ The event payload is
 { result, subject }
 ```
 where `result` is the result object above and `subject` is one of
-extract | verify | details | timestamp | ocsp | debug \
+extract | verify | details | timestamp | signatures | ocsp | debug \
 By default each method fires an event, you can override this behavior by
 calling it with `false`
 ```javascript

@@ -67,23 +67,23 @@
             (e.result.status === 0) ? outputElement.classList.add('bg-success') : outputElement.classList.add('bg-warning');
             switch (e.subject) {
                 case 'details':
-                    if (e.result.status === 0) {
-                        const filteredIssuer = JSON.stringify(
-                            Object.fromEntries(
-                                Object.entries(e.result.msg.Issuer).filter(([key]) => key !== 'Certs')
-                            ), null, 3);
-                        outputElement.innerText = `* Signer *${JSON.stringify(e.result.msg.Signer, null, 3).slice(1, -1)}\n* Issuer *${filteredIssuer.slice(1, -1)}`;
-                    }
+                    if (e.result.status === 0)
+                        outputElement.innerText = e.result.msg.map(s =>
+                            `* Signer (layer ${s.depth}) *${JSON.stringify(s.Signer, null, 3).slice(1, -1)}* Issuer *${JSON.stringify(s.Issuer, null, 3).slice(1, -1)}`
+                        ).join('\n');
                     break;
                 case 'verify':
-                    if (e.result.status === 0) {
-                        outputElement.innerText = e.result.err;
-                    }
+                    if (e.result.status === 0)
+                        outputElement.innerText = 'all signatures verified';
                     else
-                        outputElement.innerText = e.result.err.includes(':') ? e.result.err.split(':').pop() : e.result.err;
+                        outputElement.innerText = e.result.msg.map(l =>
+                            `layer ${l.depth}: ${l.status === 0 ? 'ok' : (l.err.includes(':') ? l.err.split(':').pop() : l.err)}`
+                        ).join('\n');
                     break;
                 case 'ocsp':
-                    outputElement.innerText = e.result.err;
+                    outputElement.innerText = e.result.msg.map(o =>
+                        `layer ${o.depth}: ${o.status === 0 ? 'good' : (o.err || 'revoked/unknown')}`
+                    ).join('\n');
                     break;
             }
         });
@@ -113,7 +113,9 @@
             }
             const d = await CP7M.getDetails(false);
             if (d && d.status === 0)
-                details += `\n${d.msg.Signer.CN}\n${d.msg.Signer.SN}\n${d.msg.Signer.OU}\n(${d.msg.Signer.C})\nTimestamp ${d.msg.Signer.Timestamp.toLocaleString()}`;
+                d.msg.forEach(s => {
+                    details += `\n${s.Signer.CN}\n${s.Signer.SN}\n${s.Signer.OU}\n(${s.Signer.C})\nTimestamp ${s.Timestamp ? s.Timestamp.toLocaleString() : ''}`;
+                });
             outputElement.innerText = details;
         })
     </script>
