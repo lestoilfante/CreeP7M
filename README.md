@@ -57,6 +57,7 @@ you can pass `false` to skip it.
 | ocspVerify(event) | per-signer results | OCSP revocation check for each signer |
 | buildTspIndex() | index | build/warm the trusted-list issuer index; call before getDetails() to populate issuer serial/validity |
 | CreeP7M.describeServiceType(uri) | label | static; human label for an ETSI service type URI (e.g. `…/CA/QC` → "Qualified certificate CA") |
+| CreeP7M.describeCertPolicy(oid) | label | static; human label for a certificate policy OID (e.g. `0.4.0.194112.1.2` → "Qualified certificate for e-signature, QSCD (natural person)") |
 | debugP7M(command, event) | openssl output | run any openssl command against the loaded file (caller `-in`/`-out` stripped, `-in` forced on it); defaults to an asn1parse dump |
 | CreeP7M.cacheClear() | - | clear cached TSP list (static; reload page for a fresh fetch) |
 
@@ -72,12 +73,13 @@ Every method resolves to
 ```javascript
 [{
     depth,
-    Signer: { C, OU, CN, SN, Contact, Serial, NotBefore, NotAfter },
+    Signer: { C, OU, CN, SN, Contact, Serial, NotBefore, NotAfter, Policies },
     Issuer: { DN, SKI, CRL, OCSP, Serial, NotBefore, NotAfter, ServiceTypes },
     Timestamp
 }]
 ```
 + Issuer `Serial`/`NotBefore`/`NotAfter`/`ServiceTypes` come from the trusted-list index and are `null` unless it is warm; call `buildTspIndex()` (or run `ocspVerify()`) first to populate them. `ServiceTypes` is the ETSI service type URI(s) the issuer is listed under (e.g. `…/Svctype/CA/QC`)
++ Signer `Policies` is the cert's `X509v3 Certificate Policies` OIDs (the CA-asserted purpose, e.g. qualified e-signature/e-seal, QSCD); translate with `describeCertPolicy`
 + getSignatureTimestamp: msg is an array of Date, one per signer
 + signatureCount: msg is the total signer count
 + verify / ocspVerify: msg is a per-layer / per-signer array `[{ depth, status, err }]`

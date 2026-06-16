@@ -584,6 +584,8 @@ class CreeP7M {
         //(Issuer OCSP)
         const ocspUrisMatch = certString.match(/OCSP.*URI:(.*?)\s/);
         const ocspUris = ocspUrisMatch ? ocspUrisMatch[1] : '';
+        //(Certificate Policy OIDs, asserted purpose; translate with describeCertPolicy)
+        const policies = [...certString.matchAll(/Policy:\s*([\d.]+)/g)].map(m => m[1]);
 
         const output = {
             Signer: {
@@ -594,7 +596,8 @@ class CreeP7M {
                 Contact: email,
                 Serial: certSnHex,
                 NotBefore: notBefore,
-                NotAfter: notAfter
+                NotAfter: notAfter,
+                Policies: policies
             },
             Issuer: {
                 DN: iDn,
@@ -796,5 +799,30 @@ class CreeP7M {
             'unspecified': 'Unspecified service'
         };
         return map[key] || key || '';
+    }
+
+    // Human label for a certificate policy OID (ETSI QCP/NCP, asserted purpose; falls back to the OID)
+    static describeCertPolicy(oid) {
+        const map = {
+            // ETSI EN 319 411-2 qualified certificate policies
+            '0.4.0.194112.1.0': 'Qualified certificate for e-signature (natural person)',
+            '0.4.0.194112.1.1': 'Qualified certificate for e-seal (legal person)',
+            '0.4.0.194112.1.2': 'Qualified certificate for e-signature, QSCD (natural person)',
+            '0.4.0.194112.1.3': 'Qualified certificate for e-seal, QSCD (legal person)',
+            '0.4.0.194112.1.4': 'Qualified certificate for website authentication',
+            // ETSI TS 101 456 (legacy qualified, common on older IT certs)
+            '0.4.0.1456.1.1': 'Qualified certificate (public)',
+            '0.4.0.1456.1.2': 'Qualified certificate (public, SSCD)',
+            // ETSI EN 319 411-1 non-qualified certificate policies
+            '0.4.0.2042.1.1': 'Normalized certificate policy (NCP)',
+            '0.4.0.2042.1.2': 'NCP with QSCD (NCP+)',
+            '0.4.0.2042.1.3': 'Lightweight certificate policy (LCP)',
+            '0.4.0.2042.1.4': 'Extended validation certificate policy (EVCP)',
+            '0.4.0.2042.1.6': 'Domain validation certificate policy (DVCP)',
+            '0.4.0.2042.1.7': 'Organization validation certificate policy (OVCP)',
+            '0.4.0.2042.1.8': 'Individual validation certificate policy (IVCP)',
+            '2.5.29.32.0': 'Any policy'
+        };
+        return map[oid] || oid || '';
     }
 }
