@@ -73,13 +73,15 @@ Every method resolves to
 ```javascript
 [{
     depth,
-    Signer: { C, OU, CN, SN, Contact, Serial, NotBefore, NotAfter, Policies },
+    Signer: { C, OU, CN, SN, Contact, Serial, NotBefore, NotAfter, Policies, KeyUsage, Qc },
     Issuer: { DN, SKI, CRL, OCSP, Serial, NotBefore, NotAfter, ServiceTypes },
     Timestamp
 }]
 ```
 + Issuer `Serial`/`NotBefore`/`NotAfter`/`ServiceTypes` come from the trusted-list index and are `null` unless it is warm; call `buildTspIndex()` (or run `ocspVerify()`) first to populate them. `ServiceTypes` is the ETSI service type URI(s) the issuer is listed under (e.g. `…/Svctype/CA/QC`)
 + Signer `Policies` is the cert's `X509v3 Certificate Policies` OIDs (the CA-asserted purpose, e.g. qualified e-signature/e-seal, QSCD); translate with `describeCertPolicy`
++ Signer `KeyUsage` is the cert's `X509v3 Key Usage` values (e.g. `["Digital Signature","Non Repudiation"]`)
++ Signer `Qc` is the eIDAS `QcStatements` read from the cert: `{ compliant, qscd, types }` — `compliant` = declared qualified, `qscd` = key in a QSCD, `types` = array of declared uses (`esign`/`eseal`/`web`). These are the cert's own (CA-asserted) claims; an authoritative qualified determination also needs the trusted-list service qualifiers (not yet applied)
 + getSignatureTimestamp: msg is an array of Date, one per signer
 + signatureCount: msg is the total signer count
 + verify / ocspVerify: msg is a per-layer / per-signer array `[{ depth, status, err }]`

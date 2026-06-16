@@ -533,6 +533,29 @@ class CreeP7M {
         } catch (e) { return null; }
     }
 
+    static #bytesIndexOf(hay, needle) {
+        for (let i = 0; i + needle.length <= hay.length; i++) {
+            let m = true;
+            for (let j = 0; j < needle.length; j++) { if (hay[i + j] !== needle[j]) { m = false; break; } }
+            if (m) return i;
+        }
+        return -1;
+    }
+
+    // eIDAS QcStatements from cert DER (ETSI EN 319 412-5): CA-asserted qualified / QSCD / type.
+    // OpenSSL -text decodes qcStatements poorly, so we scan the DER for the fixed statement OIDs.
+    static #parseQcStatements(der) {
+        const qc = { compliant: false, qscd: false, types: [] };
+        if (!der) return qc;
+        qc.compliant = CreeP7M.#bytesIndexOf(der, [0x06, 0x06, 0x04, 0x00, 0x8e, 0x46, 0x01, 0x01]) >= 0; //QcCompliance 0.4.0.1862.1.1
+        qc.qscd = CreeP7M.#bytesIndexOf(der, [0x06, 0x06, 0x04, 0x00, 0x8e, 0x46, 0x01, 0x04]) >= 0; //QcSSCD 0.4.0.1862.1.4
+        // QcType is a SEQUENCE OF, a cert may declare more than one use
+        if (CreeP7M.#bytesIndexOf(der, [0x06, 0x07, 0x04, 0x00, 0x8e, 0x46, 0x01, 0x06, 0x01]) >= 0) qc.types.push('esign'); //0.4.0.1862.1.6.1
+        if (CreeP7M.#bytesIndexOf(der, [0x06, 0x07, 0x04, 0x00, 0x8e, 0x46, 0x01, 0x06, 0x02]) >= 0) qc.types.push('eseal'); //...6.2
+        if (CreeP7M.#bytesIndexOf(der, [0x06, 0x07, 0x04, 0x00, 0x8e, 0x46, 0x01, 0x06, 0x03]) >= 0) qc.types.push('web'); //...6.3
+        return qc;
+    }
+
     // canonical uppercase hex serial from a cert -text block ("(0x..)", colon-hex or decimal forms)
     static #parseCertSerial(text) {
         let m = text.match(/Serial Number:[^\n(]*\(0x([0-9a-fA-F]+)\)/);
@@ -586,6 +609,14 @@ class CreeP7M {
         const ocspUris = ocspUrisMatch ? ocspUrisMatch[1] : '';
         //(Certificate Policy OIDs, asserted purpose; translate with describeCertPolicy)
         const policies = [...certString.matchAll(/Policy:\s*([\d.]+)/g)].map(m => m[1]);
+        //(Key Usage)
+        const kuMatch = certString.match(/X509v3 Key Usage:[^\n]*\n\s*([^\n]+)/);
+        const keyUsage = kuMatch ? kuMatch[1].trim().split(', ') : [];
+        //(eIDAS QcStatements, from the cert DER embedded in this block)
+        const pemMatch = certString.match(/-----BEGIN CERTIFICATE-----([\s\S]*?)(?:-----END CERTIFICATE-----|$)/);
+        let der = null;
+        if (pemMatch) { try { der = Uint8Array.from(atob(pemMatch[1].replace(/\s+/g, '')), c => c.charCodeAt(0)); } catch (e) { } }
+        const qc = CreeP7M.#parseQcStatements(der);
 
         const output = {
             Signer: {
@@ -597,7 +628,9 @@ class CreeP7M {
                 Serial: certSnHex,
                 NotBefore: notBefore,
                 NotAfter: notAfter,
-                Policies: policies
+                Policies: policies,
+                KeyUsage: keyUsage,
+                Qc: qc
             },
             Issuer: {
                 DN: iDn,
