@@ -2,6 +2,13 @@
 //    Copyright lestoilfante 2023-2026 (https://github.com/lestoilfante)
 //    GNU General Public License version 3 (GPLv3)
 //</copyright>
+//<disclaimer>
+//    CreeP7M performs technical signature verification and best-effort eIDAS
+//    qualification inference from certificate claims and the trusted list.
+//    It is NOT a qualified validation service and its
+//    results have NO legal value. For legally binding validation rely on a
+//    Qualified Trust Service Provider or the official national/EU validators.
+//</disclaimer>
 class CreeP7M {
     static #CP7M_ELEMENT; //holds file input element
     static #CP7M_MODULE; //holds a cached WebAssembly module already compiled
@@ -32,6 +39,8 @@ class CreeP7M {
         TIMESTAMP: 'timestamp',
         OCSP: 'ocsp',
         SIGNATURES: 'signatures',
+        INDEX: 'index',
+        EIDAS: 'eidas',
         DEBUG: 'debug'
     }
 
@@ -298,6 +307,62 @@ class CreeP7M {
         return _;
     }
     //
+    async verifyEidas(event = true) {
+        if (!this.fileInput) return;
+        // legal disclaimer at runtime: this is NOT a qualified validation service
+        console.warn("CreeP7M verifyEidas(): technical verification + best-effort eIDAS qualification. " +
+            "NOT a qualified validation service; results have no legal value.");
+        let r = { msg: [], err: '', status: 1000 };
+        const instance = await this.#getWasmInstance();
+        if (instance) {
+            const fileIn = await this.#sendToFSifNotExists(this.fileInput);
+            if (fileIn) {
+                if (!CreeP7M.#TSP_INDEX) await this.buildTspIndex(false); // warm issuer service info, no event
+                const signers = [];
+                await this.#peelLayers(async (layerPath, depth) => {
+                    // technical verification of this layer at its own signing time
+                    let validAtTime = Math.floor(Date.now() / 1000);
+                    const ti = await this.#getWasmInstance();
+                    if (ti) {
+                        const t = await this.#opensslRun(ti, 'asn1parse -inform DER -dlimit 1 -in ' + layerPath);
+                        const tm = (t.status === 0) ? t.msg.match(/OBJECT\s+:signingTime.*?UTCTIME\s+:(\d*Z)/s) : null;
+                        if (tm) validAtTime = Math.floor(CreeP7M.#utctimeToDate(tm[1]).getTime() / 1000);
+                    }
+                    const vi = await this.#getWasmInstance();
+                    const v = await this.#opensslRun(vi, 'cms -inform DER -in ' + layerPath + ' -verify -attime ' + validAtTime + ' -out -noout -CAfile ' + CreeP7M.#FS_CA_FILE);
+                    const verified = v.status === 0;
+                    // tier-3 qualification: technical result + cert claims + trusted-list qualifiers per signer.
+                    // NOTE partial TS 119 615: current service status only (no history), otherCriteria ignored,
+                    // and reference time is the self-asserted signingTime (qualified timestamp not validated)
+                    for (const s of await this.#parseSigners(layerPath, depth)) {
+                        const entry = this.#issuerEntries(s.Issuer.SKI, s.Issuer.DN)[0];
+                        const det = CreeP7M.#eidasDetermine(entry, s);
+                        const qualified = verified && det.qualified;
+                        s.Eidas = {
+                            verified: verified,
+                            issuerQualifiedService: det.issuerQualifiedService,
+                            serviceGranted: det.granted,
+                            qualified: qualified,
+                            qscd: det.qscd,
+                            types: det.types,
+                            assessment: !verified ? 'signature not valid'
+                                : !qualified ? 'valid signature, not determined qualified'
+                                : (det.qscd && det.types.includes('esign')) ? 'valid qualified e-signature (QES)'
+                                : (det.qscd && det.types.includes('eseal')) ? 'valid qualified e-seal (QESeal)'
+                                : 'valid signature, qualified certificate'
+                        };
+                        signers.push(s);
+                    }
+                });
+                r.msg = signers;
+                r.status = (signers.length && signers.every(s => s.Eidas.verified)) ? 0 : 1;
+            }
+        }
+        const _ = { ...r };
+        if (event) this.#sendOutput(_, CreeP7M.#EVENT.EIDAS);
+        return _;
+    }
+    //
     async debugP7M(command = 'asn1parse -i -inform DER -dlimit 1', event = true) {
         if (!this.fileInput) return;
         let r = { msg: '', err: '', status: 1000 };
@@ -457,7 +522,7 @@ class CreeP7M {
     // Resolve issuer cert(s) from trusted list, by ski then dn fallback (builds index if needed)
     async #issuerCerts(ski, dn) {
         if (!CreeP7M.#TSP_INDEX)
-            await this.buildTspIndex();
+            await this.buildTspIndex(false); // warm silently, no event for internal use
         return this.#issuerEntries(ski, dn).map(e => e.cert || e); // tolerate legacy string entries
     }
 
@@ -465,50 +530,63 @@ class CreeP7M {
     #issuerEntries(ski, dn) {
         const idx = CreeP7M.#TSP_INDEX;
         if (!idx) return [];
-        return (ski && idx.ski[ski]) || (dn && idx.dn[dn]) || [];
+        if (ski && idx.ski[ski]) return idx.ski[ski];
+        if (dn) return Object.values(idx.ski).flat().filter(e => e.dn === dn); //rare fallback, scan buckets
+        return [];
     }
 
     // Parse CA.pem once into a ski/dn keyed index of issuer cert entries, persist alongside pem cache.
     // Public so callers can warm it before getDetails() to populate issuer serial/validity
-    async buildTspIndex() {
+    async buildTspIndex(event = true) {
+        let r = { msg: null, err: '', status: 1000 };
         const bundle = CreeP7M.#file('_tsp_bundle.p7b');
         let instance = await this.#getWasmInstance();
-        if (!instance) return null;
-        let r = await this.#opensslRun(instance, 'crl2pkcs7 -nocrl -certfile ' + CreeP7M.#FS_CA_FILE + ' -out ' + bundle);
-        if (r.status !== 0) { console.error(r); return null; }
-        instance = await this.#getWasmInstance();
-        if (!instance) return null;
-        r = await this.#opensslRun(instance, 'pkcs7 -in ' + bundle + ' -print_certs -text');
-        instance.FS.unlink(bundle);
-        if (r.status !== 0) { console.error(r); return null; }
-        const index = { ski: {}, dn: {} };
-        r.msg.split('-----END CERTIFICATE-----').forEach(chunk => {
-            const pem = chunk.match(/-----BEGIN CERTIFICATE-----([\s\S]*)$/);
-            if (!pem) return;
-            const dnMatch = chunk.match(/Subject:\s*(.*?)\n/);
-            const dn = dnMatch ? dnMatch[1].split(', ').reverse().join(', ') : null; //same format as parsed Issuer.DN
-            const skiMatch = chunk.match(/X509v3 Subject Key Identifier:\s*([0-9A-Fa-f:]+)/);
-            const ski = skiMatch ? skiMatch[1] : null;
-            const nb = chunk.match(/Not Before\s*:\s*(.*)/);
-            const na = chunk.match(/Not After\s*:\s*(.*)/);
-            const cert = pem[1].replace(/\s+/g, '');
-            const entry = {
-                cert: cert,
-                serial: CreeP7M.#parseCertSerial(chunk),
-                notBefore: nb ? nb[1] : '',
-                notAfter: na ? na[1] : '',
-                serviceTypes: (CreeP7M.#TSP_SERVICES && CreeP7M.#TSP_SERVICES[cert]) || [] //from the TSL, empty if map not warm
-            };
-            if (ski) (index.ski[ski] = index.ski[ski] || []).push(entry); //NOTE same key may hold renewed/cross certs
-            if (dn) (index.dn[dn] = index.dn[dn] || []).push(entry);
-        });
-        CreeP7M.#TSP_INDEX = index;
-        const dataStore = JSON.parse(localStorage.getItem(CreeP7M.#TSP_CACHE_KEY));
-        if (dataStore) {
-            dataStore.index = index;
-            localStorage.setItem(CreeP7M.#TSP_CACHE_KEY, JSON.stringify(dataStore));
+        if (instance) {
+            let x = await this.#opensslRun(instance, 'crl2pkcs7 -nocrl -certfile ' + CreeP7M.#FS_CA_FILE + ' -out ' + bundle);
+            if (x.status === 0 && (instance = await this.#getWasmInstance())) {
+                x = await this.#opensslRun(instance, 'pkcs7 -in ' + bundle + ' -print_certs -text');
+                instance.FS.unlink(bundle);
+                if (x.status === 0) {
+                    const index = { ski: {} }; //keyed by ski; dn kept on each entry for the rare dn fallback
+                    x.msg.split('-----END CERTIFICATE-----').forEach(chunk => {
+                        const pem = chunk.match(/-----BEGIN CERTIFICATE-----([\s\S]*)$/);
+                        if (!pem) return;
+                        const dnMatch = chunk.match(/Subject:\s*(.*?)\n/);
+                        const dn = dnMatch ? dnMatch[1].split(', ').reverse().join(', ') : null; //same format as parsed Issuer.DN
+                        const skiMatch = chunk.match(/X509v3 Subject Key Identifier:\s*([0-9A-Fa-f:]+)/);
+                        const ski = skiMatch ? skiMatch[1] : null;
+                        const nb = chunk.match(/Not Before\s*:\s*(.*)/);
+                        const na = chunk.match(/Not After\s*:\s*(.*)/);
+                        const cert = pem[1].replace(/\s+/g, '');
+                        const svc = (CreeP7M.#TSP_SERVICES && CreeP7M.#TSP_SERVICES[cert]) || {}; //from the TSL, empty if map not warm
+                        const entry = {
+                            cert: cert,
+                            dn: dn || '',
+                            serial: CreeP7M.#parseCertSerial(chunk),
+                            notBefore: nb ? nb[1] : '',
+                            notAfter: na ? na[1] : '',
+                            serviceTypes: svc.types || [],
+                            status: svc.status || '',
+                            qualifications: svc.qualifications || []
+                        };
+                        if (ski) (index.ski[ski] = index.ski[ski] || []).push(entry); //NOTE same key may hold renewed/cross certs
+                    });
+                    CreeP7M.#TSP_INDEX = index;
+                    const dataStore = JSON.parse(localStorage.getItem(CreeP7M.#TSP_CACHE_KEY));
+                    if (dataStore) {
+                        dataStore.index = index;
+                        localStorage.setItem(CreeP7M.#TSP_CACHE_KEY, JSON.stringify(dataStore));
+                    }
+                    r.msg = index;
+                    r.status = 0;
+                }
+                else { r.err = x.err; console.error(x); }
+            }
+            else if (x.status !== 0) { r.err = x.err; console.error(x); }
         }
-        return index;
+        const _ = { ...r };
+        if (event) this.#sendOutput(_, CreeP7M.#EVENT.INDEX);
+        return _;
     }
 
     // True if bytes look like a DER CMS SignedData (SEQUENCE + signedData OID near the head)
@@ -554,6 +632,47 @@ class CreeP7M {
         if (CreeP7M.#bytesIndexOf(der, [0x06, 0x07, 0x04, 0x00, 0x8e, 0x46, 0x01, 0x06, 0x02]) >= 0) qc.types.push('eseal'); //...6.2
         if (CreeP7M.#bytesIndexOf(der, [0x06, 0x07, 0x04, 0x00, 0x8e, 0x46, 0x01, 0x06, 0x03]) >= 0) qc.types.push('web'); //...6.3
         return qc;
+    }
+
+    // Does a TL CriteriaList match a cert (by policy OIDs / key usage)? otherCriteria not evaluated
+    static #matchCriteria(crit, policies, keyUsage) {
+        const ku = (keyUsage || []).map(k => k.toLowerCase().replace(/\s/g, ''));
+        const checks = [];
+        (crit.policies || []).forEach(p => checks.push(policies.includes(p)));
+        (crit.keyUsage || []).forEach(k => checks.push(ku.includes(k.name) === k.val));
+        if (!checks.length) return false; // nothing evaluable -> conservative no-match
+        if (crit.assert === 'all') return checks.every(Boolean);
+        if (crit.assert === 'atLeastOne') return checks.some(Boolean);
+        if (crit.assert === 'none') return !checks.some(Boolean);
+        return false;
+    }
+
+    // Tier-3 qualification: combine a trusted-list issuer entry's service/qualifiers with the cert claims.
+    // NOTE partial TS 119 615: current service status only (no history), otherCriteria ignored, no timestamp
+    static #eidasDetermine(entry, signer) {
+        const qc = signer.Signer.Qc || { compliant: false, qscd: false, types: [] };
+        const policies = signer.Signer.Policies || [];
+        const keyUsage = signer.Signer.KeyUsage || [];
+        const isCaQc = ((entry && entry.serviceTypes) || []).some(t => t.includes('Svctype/CA/QC'));
+        const granted = !entry || !entry.status || /granted/i.test(entry.status); //current status, not at signing time
+        const q = { notQualified: false, qcStatement: false, sscd: null, types: [] };
+        ((entry && entry.qualifications) || []).forEach(qe => {
+            if (!CreeP7M.#matchCriteria(qe, policies, keyUsage)) return;
+            (qe.qualifiers || []).forEach(u => {
+                if (u.includes('NotQualified')) q.notQualified = true;
+                else if (u.includes('QCStatement')) q.qcStatement = true;
+                if (u.includes('WithSSCD') || u.includes('WithQSCD')) q.sscd = true;
+                else if (u.includes('NoSSCD') || u.includes('NoQSCD')) q.sscd = false;
+                else if (u.includes('SSCDStatusAsInCert') || u.includes('QSCDStatusAsInCert')) q.sscd = qc.qscd;
+                if (u.includes('ForeSignatures')) q.types.push('esign');
+                else if (u.includes('ForeSeals')) q.types.push('eseal');
+                else if (u.includes('ForWSA')) q.types.push('web');
+            });
+        });
+        const qualified = isCaQc && granted && !q.notQualified && (qc.compliant || q.qcStatement);
+        const qscd = (q.sscd !== null) ? q.sscd : qc.qscd;
+        const types = q.types.length ? [...new Set(q.types)] : qc.types;
+        return { qualified, qscd, types, granted, issuerQualifiedService: isCaQc };
     }
 
     // canonical uppercase hex serial from a cert -text block ("(0x..)", colon-hex or decimal forms)
@@ -731,6 +850,22 @@ class CreeP7M {
         }
     }
 
+    // Parse a service's TL Qualifications extension into evaluable elements (tier-3)
+    static #parseQualifications(service) {
+        return Array.from(service.getElementsByTagNameNS('*', 'QualificationElement')).map(qe => {
+            const qualifiers = Array.from(qe.getElementsByTagNameNS('*', 'Qualifier'))
+                .map(q => q.getAttribute('uri')).filter(Boolean);
+            const clEl = qe.getElementsByTagNameNS('*', 'CriteriaList')[0];
+            const assert = clEl ? (clEl.getAttribute('assert') || '') : '';
+            const policies = Array.from(qe.getElementsByTagNameNS('*', 'PolicyIdentifier'))
+                .map(p => { const id = p.getElementsByTagNameNS('*', 'Identifier')[0]; return id ? id.textContent.trim().replace(/^urn:oid:/, '') : null; })
+                .filter(Boolean);
+            const keyUsage = Array.from(qe.getElementsByTagNameNS('*', 'KeyUsageBit'))
+                .map(k => ({ name: (k.getAttribute('name') || '').toLowerCase().replace(/\s/g, ''), val: k.textContent.trim() === 'true' }));
+            return { qualifiers, assert, policies, keyUsage };
+        });
+    }
+
     static async #fetchCAs() {
         // Look for a cached version
         const dataStore = JSON.parse(localStorage.getItem(CreeP7M.#TSP_CACHE_KEY));
@@ -761,16 +896,22 @@ class CreeP7M {
                 if (doc.querySelector('parsererror'))
                     throw new Error('TSL XML parse error');
                 // only certs bound to a TSP service, skip scheme operator and TL signature;
-                // dedup (same cert is listed under several services) and map each to its service type(s)
+                // dedup (same cert listed under several services) and map each cert to its service
+                // type(s), plus the status and eIDAS qualifications of its CA/QC service (tier-3)
                 const services = {};
                 Array.from(doc.getElementsByTagNameNS('*', 'ServiceInformation')).forEach(service => {
                     const typeEl = service.getElementsByTagNameNS('*', 'ServiceTypeIdentifier')[0];
                     const type = typeEl ? typeEl.textContent.trim() : '';
+                    const statusEl = service.getElementsByTagNameNS('*', 'ServiceStatus')[0];
+                    const status = statusEl ? statusEl.textContent.trim() : '';
+                    const quals = CreeP7M.#parseQualifications(service);
                     Array.from(service.getElementsByTagNameNS('*', 'X509Certificate')).forEach(cert => {
                         const base64 = cert.textContent.replace(/\s+/g, '');
                         if (!base64) return;
-                        const types = services[base64] || (services[base64] = []);
-                        if (type && !types.includes(type)) types.push(type);
+                        const s = services[base64] || (services[base64] = { types: [], status: '', qualifications: [] });
+                        if (type && !s.types.includes(type)) s.types.push(type);
+                        // keep status + qualifications from the qualified-cert (CA/QC) service
+                        if (type.includes('Svctype/CA/QC')) { s.status = status; s.qualifications = quals; }
                     });
                 });
                 let pemCertificates = '';

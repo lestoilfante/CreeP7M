@@ -55,7 +55,8 @@ you can pass `false` to skip it.
 | getSignatureTimestamp(event) | Date array | signing time per signer |
 | signatureCount(event) | number | total signers across all layers |
 | ocspVerify(event) | per-signer results | OCSP revocation check for each signer |
-| buildTspIndex() | index | build/warm the trusted-list issuer index; call before getDetails() to populate issuer serial/validity |
+| verifyEidas(event) | per-signer assessment | technical verify + eIDAS qualification per signer (cert QcStatements + trusted-list qualifiers; partial TS 119 615, warms the index); **not** a legal determination — see disclaimer |
+| buildTspIndex(event) | index | build/warm the trusted-list issuer index; call before getDetails() to populate issuer serial/validity |
 | CreeP7M.describeServiceType(uri) | label | static; human label for an ETSI service type URI (e.g. `…/CA/QC` → "Qualified certificate CA") |
 | CreeP7M.describeCertPolicy(oid) | label | static; human label for a certificate policy OID (e.g. `0.4.0.194112.1.2` → "Qualified certificate for e-signature, QSCD (natural person)") |
 | debugP7M(command, event) | openssl output | run any openssl command against the loaded file (caller `-in`/`-out` stripped, `-in` forced on it); defaults to an asn1parse dump |
@@ -85,6 +86,7 @@ Every method resolves to
 + getSignatureTimestamp: msg is an array of Date, one per signer
 + signatureCount: msg is the total signer count
 + verify / ocspVerify: msg is a per-layer / per-signer array `[{ depth, status, err }]`
++ verifyEidas: msg is a per-signer array of the getDetails entry plus an `Eidas` field `{ verified, issuerQualifiedService, serviceGranted, qualified, qscd, types, assessment }`. `verified` is the technical result; `qualified`/`qscd`/`types` combine the cert `QcStatements` with the trusted-list service qualifiers (`Qualifications`/`CriteriaList`). `status` 0 iff every layer verifies technically. **Partial ETSI TS 119 615**: current service status only (no history), `otherCriteria` not evaluated, and reference time is the self-asserted `signingTime` (qualified timestamp-token not validated) — see the legal disclaimer
 
 ### Getters
 | Getter | Value |
@@ -103,7 +105,7 @@ The event payload is
 { result, subject }
 ```
 where `result` is the result object above and `subject` is one of
-extract | verify | details | timestamp | signatures | ocsp | debug \
+extract | verify | details | timestamp | signatures | ocsp | index | eidas | debug \
 By default each method fires an event, you can override this behavior by
 calling it with `false`
 ```javascript
@@ -113,6 +115,13 @@ const verifyResult = await CP7M.verify(false);
 ### Notes
 + Only the first `new CreeP7M()` wires things up, later instances are no-ops while one is active; state is shared
 + When set, the cors-proxy is only a fallback for the Trusted List fetch (always used for OCSP).
+
+## Legal disclaimer
+> CreeP7M performs technical signature verification and
+> best-effort eIDAS qualification inference from certificate claims and the
+> trusted list. It is **NOT a qualified validation service** and its results have **no legal value**. For legally binding
+> validation rely on a Qualified Trust Service Provider or the official
+> national/EU validators.
 
 ## Build OpenSSL to WebAssembly
 A prebuilt binary is already provided but you can build your own.\
@@ -155,4 +164,3 @@ https://github.com/esig/dss/blob/master/dss-cookbook/src/main/asciidoc/_chapters
 [Copyright 2023-2026 lestoilfante](https://github.com/lestoilfante)
 
 GNU General Public License version 3 (GPLv3)
-
