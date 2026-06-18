@@ -33,6 +33,7 @@ class CreeP7M {
         CACHECLEAR: '.cp7m-cacheClear'
     };
     static #EVENT = {
+        PROCESS: 'process', //fired before an operation starts, so the UI can show a busy state
         EXTRACT: 'extract',
         VERIFY: 'verify',
         DETAILS: 'details',
@@ -145,56 +146,64 @@ class CreeP7M {
     }
 
     // 
-    async extract() {
+    async extract(event = true) {
         if (!this.fileInput) return;
+        if (event) this.#sendProcess(CreeP7M.#EVENT.EXTRACT);
         let r = { msg: '', err: '', status: 1000 };
-        const instance = await this.#getWasmInstance();
-        if (instance) {
-            const fileIn = await this.#sendToFSifNotExists(this.fileInput);
-            if (fileIn) {
-                // peel the whole matrioska, download the innermost payload
-                const peel = await this.#peelLayers(null, true);
-                if (peel && peel.payload) {
-                    const fileOut = this.#readFile(peel.payload.path);
-                    CreeP7M.#sendFileToBrowser(fileOut, peel.payload.name);
-                    this.#process.FS.unlink(peel.payload.path);
-                    r = { msg: peel.layers, err: '', status: 0 };
+        try {
+            const instance = await this.#getWasmInstance();
+            if (instance) {
+                const fileIn = await this.#sendToFSifNotExists(this.fileInput);
+                if (fileIn) {
+                    // peel the whole matrioska, download the innermost payload
+                    const peel = await this.#peelLayers(null, true);
+                    if (peel && peel.payload) {
+                        const fileOut = this.#readFile(peel.payload.path);
+                        CreeP7M.#sendFileToBrowser(fileOut, peel.payload.name);
+                        this.#process.FS.unlink(peel.payload.path);
+                        r = { msg: peel.layers, err: '', status: 0 };
+                    }
+                    else
+                        r.err = 'unable to extract payload';
                 }
-                else
-                    r.err = 'unable to extract payload';
             }
         }
+        catch (e) { r.err = e; console.error(r); }
         const _ = { ...r };
-        this.#sendOutput(_, CreeP7M.#EVENT.EXTRACT);
+        if (event) this.#sendOutput(_, CreeP7M.#EVENT.EXTRACT);
         return _;
     }
     //
     async verify(event = true) {
         if (!this.fileInput) return;
+        if (event) this.#sendProcess(CreeP7M.#EVENT.VERIFY);
         let r = { msg: [], err: '', status: 1000 };
-        const instance = await this.#getWasmInstance();
-        if (instance) {
-            const fileIn = await this.#sendToFSifNotExists(this.fileInput);
-            if (fileIn) {
-                // verify every layer at its own signing time, collect per-layer outcome
-                const layers = [];
-                await this.#peelLayers(async (layerPath, depth) => {
-                    let validAtTime = Math.floor(Date.now() / 1000);
-                    const ti = await this.#getWasmInstance();
-                    if (ti) {
-                        const t = await this.#opensslRun(ti, 'asn1parse -inform DER -dlimit 1 -in ' + layerPath);
-                        const tm = (t.status === 0) ? t.msg.match(/OBJECT\s+:signingTime.*?UTCTIME\s+:(\d*Z)/s) : null;
-                        if (tm) validAtTime = Math.floor(CreeP7M.#utctimeToDate(tm[1]).getTime() / 1000);
-                    }
-                    const vi = await this.#getWasmInstance();
-                    const v = await this.#opensslRun(vi, 'cms -inform DER -in ' + layerPath + ' -verify -attime ' + validAtTime + ' -out -noout -CAfile ' + CreeP7M.#FS_CA_FILE);
-                    layers.push({ depth: depth, status: v.status, err: v.err });
-                });
-                r.msg = layers;
-                r.status = (layers.length && layers.every(l => l.status === 0)) ? 0 : 1;
-                r.err = layers.filter(l => l.status !== 0).map(l => l.err).join('');
+        try {
+            const instance = await this.#getWasmInstance();
+            if (instance) {
+                const fileIn = await this.#sendToFSifNotExists(this.fileInput);
+                if (fileIn) {
+                    // verify every layer at its own signing time, collect per-layer outcome
+                    const layers = [];
+                    await this.#peelLayers(async (layerPath, depth) => {
+                        let validAtTime = Math.floor(Date.now() / 1000);
+                        const ti = await this.#getWasmInstance();
+                        if (ti) {
+                            const t = await this.#opensslRun(ti, 'asn1parse -inform DER -dlimit 1 -in ' + layerPath);
+                            const tm = (t.status === 0) ? t.msg.match(/OBJECT\s+:signingTime.*?UTCTIME\s+:(\d*Z)/s) : null;
+                            if (tm) validAtTime = Math.floor(CreeP7M.#utctimeToDate(tm[1]).getTime() / 1000);
+                        }
+                        const vi = await this.#getWasmInstance();
+                        const v = await this.#opensslRun(vi, 'cms -inform DER -in ' + layerPath + ' -verify -attime ' + validAtTime + ' -out -noout -CAfile ' + CreeP7M.#FS_CA_FILE);
+                        layers.push({ depth: depth, status: v.status, err: v.err });
+                    });
+                    r.msg = layers;
+                    r.status = (layers.length && layers.every(l => l.status === 0)) ? 0 : 1;
+                    r.err = layers.filter(l => l.status !== 0).map(l => l.err).join('');
+                }
             }
         }
+        catch (e) { r.err = e; console.error(r); }
         const _ = { ...r };
         if (event) this.#sendOutput(_, CreeP7M.#EVENT.VERIFY);
         return _;
@@ -202,15 +211,19 @@ class CreeP7M {
     //
     async getDetails(event = true) {
         if (!this.fileInput) return;
+        if (event) this.#sendProcess(CreeP7M.#EVENT.DETAILS);
         let r = { msg: [], err: '', status: 1000 };
-        const instance = await this.#getWasmInstance();
-        if (instance) {
-            const fileIn = await this.#sendToFSifNotExists(this.fileInput);
-            if (fileIn) {
-                r.msg = await this.#collectSigners(); // flat list, one entry per signer with depth
-                r.status = r.msg.length ? 0 : 1;
+        try {
+            const instance = await this.#getWasmInstance();
+            if (instance) {
+                const fileIn = await this.#sendToFSifNotExists(this.fileInput);
+                if (fileIn) {
+                    r.msg = await this.#collectSigners(); // flat list, one entry per signer with depth
+                    r.status = r.msg.length ? 0 : 1;
+                }
             }
         }
+        catch (e) { r.err = e; console.error(r); }
         const _ = { ...r };
         if (event) this.#sendOutput(_, CreeP7M.#EVENT.DETAILS);
         return _;
@@ -218,16 +231,20 @@ class CreeP7M {
     //
     async getSignatureTimestamp(event = true) {
         if (!this.fileInput) return;
+        if (event) this.#sendProcess(CreeP7M.#EVENT.TIMESTAMP);
         let r = { msg: [], err: '', status: 1000 };
-        const instance = await this.#getWasmInstance();
-        if (instance) {
-            const fileIn = await this.#sendToFSifNotExists(this.fileInput);
-            if (fileIn) {
-                const signers = await this.#collectSigners();
-                r.msg = signers.map(s => s.Timestamp); // one Date per signer, in layer order
-                r.status = signers.length ? 0 : 1;
+        try {
+            const instance = await this.#getWasmInstance();
+            if (instance) {
+                const fileIn = await this.#sendToFSifNotExists(this.fileInput);
+                if (fileIn) {
+                    const signers = await this.#collectSigners();
+                    r.msg = signers.map(s => s.Timestamp); // one Date per signer, in layer order
+                    r.status = signers.length ? 0 : 1;
+                }
             }
         }
+        catch (e) { r.err = e; console.error(r); }
         const _ = { ...r };
         if (event) this.#sendOutput(_, CreeP7M.#EVENT.TIMESTAMP);
         return _;
@@ -235,16 +252,20 @@ class CreeP7M {
     //
     async signatureCount(event = true) {
         if (!this.fileInput) return;
+        if (event) this.#sendProcess(CreeP7M.#EVENT.SIGNATURES);
         let r = { msg: 0, err: '', status: 1000 };
-        const instance = await this.#getWasmInstance();
-        if (instance) {
-            const fileIn = await this.#sendToFSifNotExists(this.fileInput);
-            if (fileIn) {
-                // total signers across all matrioska layers
-                r.msg = (await this.#collectSigners()).length;
-                r.status = 0;
+        try {
+            const instance = await this.#getWasmInstance();
+            if (instance) {
+                const fileIn = await this.#sendToFSifNotExists(this.fileInput);
+                if (fileIn) {
+                    // total signers across all matrioska layers
+                    r.msg = (await this.#collectSigners()).length;
+                    r.status = 0;
+                }
             }
         }
+        catch (e) { r.err = e; console.error(r); }
         const _ = { ...r };
         if (event) this.#sendOutput(_, CreeP7M.#EVENT.SIGNATURES);
         return _;
@@ -252,6 +273,7 @@ class CreeP7M {
     //
     async ocspVerify(event = true) {
         if (!this.fileInput) return;
+        if (event) this.#sendProcess(CreeP7M.#EVENT.OCSP);
         // since emscripten wasm binary has very limited network access we use openssl offline ocsp verification + fetch
         let r = { msg: [], err: '', status: 1000 };
         try {
@@ -312,52 +334,56 @@ class CreeP7M {
         // legal disclaimer at runtime: this is NOT a qualified validation service
         console.warn("CreeP7M verifyEidas(): technical verification + best-effort eIDAS qualification. " +
             "NOT a qualified validation service; results have no legal value.");
+        if (event) this.#sendProcess(CreeP7M.#EVENT.EIDAS);
         let r = { msg: [], err: '', status: 1000 };
-        const instance = await this.#getWasmInstance();
-        if (instance) {
-            const fileIn = await this.#sendToFSifNotExists(this.fileInput);
-            if (fileIn) {
-                if (!CreeP7M.#TSP_INDEX) await this.buildTspIndex(false); // warm issuer service info, no event
-                const signers = [];
-                await this.#peelLayers(async (layerPath, depth) => {
-                    // technical verification of this layer at its own signing time
-                    let validAtTime = Math.floor(Date.now() / 1000);
-                    const ti = await this.#getWasmInstance();
-                    if (ti) {
-                        const t = await this.#opensslRun(ti, 'asn1parse -inform DER -dlimit 1 -in ' + layerPath);
-                        const tm = (t.status === 0) ? t.msg.match(/OBJECT\s+:signingTime.*?UTCTIME\s+:(\d*Z)/s) : null;
-                        if (tm) validAtTime = Math.floor(CreeP7M.#utctimeToDate(tm[1]).getTime() / 1000);
-                    }
-                    const vi = await this.#getWasmInstance();
-                    const v = await this.#opensslRun(vi, 'cms -inform DER -in ' + layerPath + ' -verify -attime ' + validAtTime + ' -out -noout -CAfile ' + CreeP7M.#FS_CA_FILE);
-                    const verified = v.status === 0;
-                    // tier-3 qualification: technical result + cert claims + trusted-list qualifiers per signer.
-                    // NOTE partial TS 119 615: current service status only (no history), otherCriteria ignored,
-                    // and reference time is the self-asserted signingTime (qualified timestamp not validated)
-                    for (const s of await this.#parseSigners(layerPath, depth)) {
-                        const entry = this.#issuerEntries(s.Issuer.SKI, s.Issuer.DN)[0];
-                        const det = CreeP7M.#eidasDetermine(entry, s);
-                        const qualified = verified && det.qualified;
-                        s.Eidas = {
-                            verified: verified,
-                            issuerQualifiedService: det.issuerQualifiedService,
-                            serviceGranted: det.granted,
-                            qualified: qualified,
-                            qscd: det.qscd,
-                            types: det.types,
-                            assessment: !verified ? 'signature not valid'
-                                : !qualified ? 'valid signature, not determined qualified'
-                                : (det.qscd && det.types.includes('esign')) ? 'valid qualified e-signature (QES)'
-                                : (det.qscd && det.types.includes('eseal')) ? 'valid qualified e-seal (QESeal)'
-                                : 'valid signature, qualified certificate'
-                        };
-                        signers.push(s);
-                    }
-                });
-                r.msg = signers;
-                r.status = (signers.length && signers.every(s => s.Eidas.verified)) ? 0 : 1;
+        try {
+            const instance = await this.#getWasmInstance();
+            if (instance) {
+                const fileIn = await this.#sendToFSifNotExists(this.fileInput);
+                if (fileIn) {
+                    if (!CreeP7M.#TSP_INDEX) await this.buildTspIndex(false); // warm issuer service info, no event
+                    const signers = [];
+                    await this.#peelLayers(async (layerPath, depth) => {
+                        // technical verification of this layer at its own signing time
+                        let validAtTime = Math.floor(Date.now() / 1000);
+                        const ti = await this.#getWasmInstance();
+                        if (ti) {
+                            const t = await this.#opensslRun(ti, 'asn1parse -inform DER -dlimit 1 -in ' + layerPath);
+                            const tm = (t.status === 0) ? t.msg.match(/OBJECT\s+:signingTime.*?UTCTIME\s+:(\d*Z)/s) : null;
+                            if (tm) validAtTime = Math.floor(CreeP7M.#utctimeToDate(tm[1]).getTime() / 1000);
+                        }
+                        const vi = await this.#getWasmInstance();
+                        const v = await this.#opensslRun(vi, 'cms -inform DER -in ' + layerPath + ' -verify -attime ' + validAtTime + ' -out -noout -CAfile ' + CreeP7M.#FS_CA_FILE);
+                        const verified = v.status === 0;
+                        // tier-3 qualification: technical result + cert claims + trusted-list qualifiers per signer.
+                        // NOTE partial TS 119 615: current service status only (no history), otherCriteria ignored,
+                        // and reference time is the self-asserted signingTime (qualified timestamp not validated)
+                        for (const s of await this.#parseSigners(layerPath, depth)) {
+                            const entry = this.#issuerEntries(s.Issuer.SKI, s.Issuer.DN)[0];
+                            const det = CreeP7M.#eidasDetermine(entry, s);
+                            const qualified = verified && det.qualified;
+                            s.Eidas = {
+                                verified: verified,
+                                issuerQualifiedService: det.issuerQualifiedService,
+                                serviceGranted: det.granted,
+                                qualified: qualified,
+                                qscd: det.qscd,
+                                types: det.types,
+                                assessment: !verified ? 'signature not valid'
+                                    : !qualified ? 'valid signature, not determined qualified'
+                                    : (det.qscd && det.types.includes('esign')) ? 'valid qualified e-signature (QES)'
+                                    : (det.qscd && det.types.includes('eseal')) ? 'valid qualified e-seal (QESeal)'
+                                    : 'valid signature, qualified certificate'
+                            };
+                            signers.push(s);
+                        }
+                    });
+                    r.msg = signers;
+                    r.status = (signers.length && signers.every(s => s.Eidas.verified)) ? 0 : 1;
+                }
             }
         }
+        catch (e) { r.err = e; console.error(r); }
         const _ = { ...r };
         if (event) this.#sendOutput(_, CreeP7M.#EVENT.EIDAS);
         return _;
@@ -365,17 +391,21 @@ class CreeP7M {
     //
     async debugP7M(command = 'asn1parse -i -inform DER -dlimit 1', event = true) {
         if (!this.fileInput) return;
+        if (event) this.#sendProcess(CreeP7M.#EVENT.DEBUG);
         let r = { msg: '', err: '', status: 1000 };
-        const instance = await this.#getWasmInstance();
-        if (instance) {
-            const fileIn = await this.#sendToFSifNotExists(this.fileInput);
-            if (fileIn) {
-                // drop caller -in/-out (and their values) to keep the virtual FS safe, force -in on current file
-                const args = command.split(' ').filter((tok, i, a) => tok !== '-in' && tok !== '-out' && a[i - 1] !== '-in' && a[i - 1] !== '-out');
-                args.push('-in', CreeP7M.#file(this.fileInput.name));
-                r = await this.#opensslRun(instance, args.join(' '));
+        try {
+            const instance = await this.#getWasmInstance();
+            if (instance) {
+                const fileIn = await this.#sendToFSifNotExists(this.fileInput);
+                if (fileIn) {
+                    // drop caller -in/-out (and their values) to keep the virtual FS safe, force -in on current file
+                    const args = command.split(' ').filter((tok, i, a) => tok !== '-in' && tok !== '-out' && a[i - 1] !== '-in' && a[i - 1] !== '-out');
+                    args.push('-in', CreeP7M.#file(this.fileInput.name));
+                    r = await this.#opensslRun(instance, args.join(' '));
+                }
             }
         }
+        catch (e) { r.err = e; console.error(r); }
         const _ = { ...r };
         if (event) this.#sendOutput(_, CreeP7M.#EVENT.DEBUG);
         return _;
@@ -399,6 +429,10 @@ class CreeP7M {
             result: v,
             subject: cmd
         });
+    }
+    // fired before an operation does its work; result.msg names the upcoming operation, status 1000 = pending
+    #sendProcess(op) {
+        this.#sendOutput({ msg: op, err: '', status: 1000 }, CreeP7M.#EVENT.PROCESS);
     }
 
     async #sendToFSifNotExists(fileInput) {
@@ -538,52 +572,56 @@ class CreeP7M {
     // Parse CA.pem once into a ski/dn keyed index of issuer cert entries, persist alongside pem cache.
     // Public so callers can warm it before getDetails() to populate issuer serial/validity
     async buildTspIndex(event = true) {
+        if (event) this.#sendProcess(CreeP7M.#EVENT.INDEX);
         let r = { msg: null, err: '', status: 1000 };
-        const bundle = CreeP7M.#file('_tsp_bundle.p7b');
-        let instance = await this.#getWasmInstance();
-        if (instance) {
-            let x = await this.#opensslRun(instance, 'crl2pkcs7 -nocrl -certfile ' + CreeP7M.#FS_CA_FILE + ' -out ' + bundle);
-            if (x.status === 0 && (instance = await this.#getWasmInstance())) {
-                x = await this.#opensslRun(instance, 'pkcs7 -in ' + bundle + ' -print_certs -text');
-                instance.FS.unlink(bundle);
-                if (x.status === 0) {
-                    const index = { ski: {} }; //keyed by ski; dn kept on each entry for the rare dn fallback
-                    x.msg.split('-----END CERTIFICATE-----').forEach(chunk => {
-                        const pem = chunk.match(/-----BEGIN CERTIFICATE-----([\s\S]*)$/);
-                        if (!pem) return;
-                        const dnMatch = chunk.match(/Subject:\s*(.*?)\n/);
-                        const dn = dnMatch ? dnMatch[1].split(', ').reverse().join(', ') : null; //same format as parsed Issuer.DN
-                        const skiMatch = chunk.match(/X509v3 Subject Key Identifier:\s*([0-9A-Fa-f:]+)/);
-                        const ski = skiMatch ? skiMatch[1] : null;
-                        const nb = chunk.match(/Not Before\s*:\s*(.*)/);
-                        const na = chunk.match(/Not After\s*:\s*(.*)/);
-                        const cert = pem[1].replace(/\s+/g, '');
-                        const svc = (CreeP7M.#TSP_SERVICES && CreeP7M.#TSP_SERVICES[cert]) || {}; //from the TSL, empty if map not warm
-                        const entry = {
-                            cert: cert,
-                            dn: dn || '',
-                            serial: CreeP7M.#parseCertSerial(chunk),
-                            notBefore: nb ? nb[1] : '',
-                            notAfter: na ? na[1] : '',
-                            serviceTypes: svc.types || [],
-                            status: svc.status || '',
-                            qualifications: svc.qualifications || []
-                        };
-                        if (ski) (index.ski[ski] = index.ski[ski] || []).push(entry); //NOTE same key may hold renewed/cross certs
-                    });
-                    CreeP7M.#TSP_INDEX = index;
-                    const dataStore = JSON.parse(localStorage.getItem(CreeP7M.#TSP_CACHE_KEY));
-                    if (dataStore) {
-                        dataStore.index = index;
-                        localStorage.setItem(CreeP7M.#TSP_CACHE_KEY, JSON.stringify(dataStore));
+        try {
+            const bundle = CreeP7M.#file('_tsp_bundle.p7b');
+            let instance = await this.#getWasmInstance();
+            if (instance) {
+                let x = await this.#opensslRun(instance, 'crl2pkcs7 -nocrl -certfile ' + CreeP7M.#FS_CA_FILE + ' -out ' + bundle);
+                if (x.status === 0 && (instance = await this.#getWasmInstance())) {
+                    x = await this.#opensslRun(instance, 'pkcs7 -in ' + bundle + ' -print_certs -text');
+                    instance.FS.unlink(bundle);
+                    if (x.status === 0) {
+                        const index = { ski: {} }; //keyed by ski; dn kept on each entry for the rare dn fallback
+                        x.msg.split('-----END CERTIFICATE-----').forEach(chunk => {
+                            const pem = chunk.match(/-----BEGIN CERTIFICATE-----([\s\S]*)$/);
+                            if (!pem) return;
+                            const dnMatch = chunk.match(/Subject:\s*(.*?)\n/);
+                            const dn = dnMatch ? dnMatch[1].split(', ').reverse().join(', ') : null; //same format as parsed Issuer.DN
+                            const skiMatch = chunk.match(/X509v3 Subject Key Identifier:\s*([0-9A-Fa-f:]+)/);
+                            const ski = skiMatch ? skiMatch[1] : null;
+                            const nb = chunk.match(/Not Before\s*:\s*(.*)/);
+                            const na = chunk.match(/Not After\s*:\s*(.*)/);
+                            const cert = pem[1].replace(/\s+/g, '');
+                            const svc = (CreeP7M.#TSP_SERVICES && CreeP7M.#TSP_SERVICES[cert]) || {}; //from the TSL, empty if map not warm
+                            const entry = {
+                                cert: cert,
+                                dn: dn || '',
+                                serial: CreeP7M.#parseCertSerial(chunk),
+                                notBefore: nb ? nb[1] : '',
+                                notAfter: na ? na[1] : '',
+                                serviceTypes: svc.types || [],
+                                status: svc.status || '',
+                                qualifications: svc.qualifications || []
+                            };
+                            if (ski) (index.ski[ski] = index.ski[ski] || []).push(entry); //NOTE same key may hold renewed/cross certs
+                        });
+                        CreeP7M.#TSP_INDEX = index;
+                        const dataStore = JSON.parse(localStorage.getItem(CreeP7M.#TSP_CACHE_KEY));
+                        if (dataStore) {
+                            dataStore.index = index;
+                            localStorage.setItem(CreeP7M.#TSP_CACHE_KEY, JSON.stringify(dataStore));
+                        }
+                        r.msg = index;
+                        r.status = 0;
                     }
-                    r.msg = index;
-                    r.status = 0;
+                    else { r.err = x.err; console.error(x); }
                 }
-                else { r.err = x.err; console.error(x); }
+                else if (x.status !== 0) { r.err = x.err; console.error(x); }
             }
-            else if (x.status !== 0) { r.err = x.err; console.error(x); }
         }
+        catch (e) { r.err = e; console.error(r); }
         const _ = { ...r };
         if (event) this.#sendOutput(_, CreeP7M.#EVENT.INDEX);
         return _;

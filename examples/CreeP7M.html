@@ -1,123 +1,325 @@
-﻿<!--
+<!--
 <copyright>
-    Copyright lestoilfante 2023 (https://github.com/lestoilfante)
+    Copyright lestoilfante 2023-2026 (https://github.com/lestoilfante)
     GNU General Public License version 3 (GPLv3)
 </copyright>
+<disclaimer>
+    CreeP7M performs technical signature verification and best-effort eIDAS
+    qualification inference from certificate claims and the trusted list.
+    It is NOT a qualified validation service and its
+    results have NO legal value. For legally binding validation rely on a
+    Qualified Trust Service Provider or the official national/EU validators.
+</disclaimer>
 -->
 <!DOCTYPE html>
 <html>
 <head>
     <title>CreeP7M</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
+
     <!-- Load CreeP7M -->
     <script src="../CreeP7M/creep7m.js" data-cp7m-path="../CreeP7M/openssl"></script>
 </head>
+
 <body>
     <div class="container">
         <div class="row">
             <div class="col"></div>
+
             <div class="col col-xl-6 col-sm-10">
                 <div class="fs-5 p-3 text-center">CreeP7M - p7m utility</div>
+
                 <div class="text-center p-2 rounded bg-light w-100">
                     User friendly web-app to extract and verify p7m file<br>
                     Full offline file process, it never gets uploaded nor shared with external parties<br>
                     powered by <a href="https://github.com/lestoilfante/CreeP7M" target="_blank">CreeP7M</a> library and OpenSSL embedded wasm module
                 </div>
+
+                <!-- default-bound action, class 'cp7m-input' wired automatically by CreeP7M -->
                 <div class="row p-3">
                     <div class="input-group mb-3">
-                        <input class="cp7m-input form-control" type="file" accept=".p7m">
+                        <input id="inputFile" class="cp7m-input form-control" type="file" accept=".p7m">
                         <button class="cp7m-extract btn btn-success" type="button">Extract</button>
                     </div>
                 </div>
-                <div class="row p-3">
+
+                <!-- programmatic actions, no default binding -->
+                <div class="row px-3 g-2">
                     <div class="col">
-                        <button class="cp7m-verify mb-1 w-100 btn btn-primary">Verify</button>
+                        <button id="btnVerify" class="w-100 btn btn-primary">Verify</button>
                     </div>
                     <div class="col">
-                        <button class="cp7m-details mb-1 w-100 btn btn-primary">Details</button>
+                        <button id="btnDetails" class="w-100 btn btn-primary">Details</button>
                     </div>
                     <div class="col">
-                        <button class="cp7m-ocsp mb-1 w-100 btn btn-primary">Revocation</button>
+                        <button id="btnOcsp" class="w-100 btn btn-primary">Revocation</button>
                     </div>
                 </div>
+                <div class="row px-3 pt-2 g-2">
+                    <div class="col">
+                        <button id="btnEidas" class="w-100 btn btn-primary">eIDAS</button>
+                    </div>
+                    <div class="col">
+                        <button id="btnCount" class="w-100 btn btn-primary">Signatures</button>
+                    </div>
+                    <div class="col">
+                        <button id="btnTimestamp" class="w-100 btn btn-primary">Timestamp</button>
+                    </div>
+                </div>
+
+                <div class="row px-3 pt-2 g-2">
+                    <div class="col">
+                        <button id="btnDebug" class="w-100 btn btn-outline-secondary">ASN.1 dump</button>
+                    </div>
+                    <div class="col">
+                        <button id="btnIndex" class="w-100 btn btn-outline-secondary">Warm TSP index</button>
+                    </div>
+                    <div class="col">
+                        <button class="cp7m-cacheClear w-100 btn btn-outline-secondary">Clear cache</button>
+                    </div>
+                </div>
+
+                <div class="text-center text-muted small p-2">
+                    eIDAS result is a best-effort technical assessment, not a legal validation
+                </div>
+
                 <div class="row p-3">
                     <div class="w-100 text-center">
                         <div id="customSpinner" class="spinner-border text-primary d-none" role="status">
                             <span class="visually-hidden">Loading...</span>
                         </div>
                     </div>
-                    <div id="customOutput" class="w-100 rounded text-break text-center p-2 bg-opacity-75"></div>
-                    <div id="tsp" class="w-100 text-center p-2"></div>
-                    <div id="eventOutput" class="w-100 rounded text-break text-center p-2 bg-opacity-75" style="white-space: pre-wrap;"></div>
+
+                    <div id="customOutput" class="w-100 rounded text-break p-2 bg-opacity-75" style="white-space: pre-wrap;"></div>
+                    <div id="tsp" class="w-100 text-center text-muted small p-2" style="white-space: pre-wrap;"></div>
+                    <div id="eventOutput" class="w-100 text-center text-muted small"></div>
                 </div>
             </div>
+
             <div class="col"></div>
         </div>
     </div>
-    <!-- Basic inline CreeP7M usage -->
+
+    <!-- CreeP7M setup and output rendering -->
     <script>
-        //  Initialize with your preferred cors-proxy
         const CP7M = new CreeP7M(null, 'https://www.itsbalto.com/f/cors-proxy/?apiurl=');
-        // Set your callback
-        CP7M.addEventListener("cp7mOutput", (e) => {
+
+        const input = document.querySelector('.cp7m-input');
+        const out = document.getElementById('customOutput');
+        const spinner = document.getElementById('customSpinner');
+        const eventOutput = document.getElementById('eventOutput');
+
+        let busySubject = null;
+
+        const hasSelectedFile = () => input?.files?.length > 0;
+
+        const setBusy = (subject = null) => {
+            busySubject = subject;
+            spinner.classList.remove('d-none');
+            out.classList.add('d-none');
+        };
+
+        const clearBusy = () => {
+            busySubject = null;
+            spinner.classList.add('d-none');
+            eventOutput.innerText = '';
+        };
+		
+		const cleanUp = () => {
+            spinner.classList.add('d-none');
+			out.classList.add('d-none');
+            eventOutput.innerText = '';
+        };
+
+        const show = (text, ok) => {
+			out.innerText = text;
+            out.classList.remove('bg-success', 'bg-warning', 'd-none');
+            out.classList.add(ok ? 'bg-success' : 'bg-warning');
+        };
+
+        const clean = (s) => (s || '').includes(':') ? s.split(':').pop().trim() : s;
+
+        const detailsText = (s) => {
+            const qc = s.Signer.Qc || {};
+
+            return `Layer ${s.depth}\n`
+                + `Signer:   ${s.Signer.CN}\n`
+                + `ID:       ${s.Signer.SN}\n`
+                + `Org:      ${s.Signer.OU} (${s.Signer.C})\n`
+                + `Serial:   ${s.Signer.Serial}\n`
+                + `Valid:    ${s.Signer.NotBefore} -> ${s.Signer.NotAfter}\n`
+                + `Signed:   ${s.Timestamp ? s.Timestamp.toLocaleString() : '-'}\n`
+                + `KeyUsage: ${(s.Signer.KeyUsage || []).join(', ') || '-'}\n`
+                + `Policies: ${(s.Signer.Policies || []).map(CreeP7M.describeCertPolicy).join('; ') || '-'}\n`
+                + `Qc:       compliant=${!!qc.compliant} qscd=${!!qc.qscd} types=${(qc.types || []).join('/') || '-'}\n`
+                + `Issuer:   ${s.Issuer.DN}\n`
+                + `Service:  ${(s.Issuer.ServiceTypes || []).map(CreeP7M.describeServiceType).join('; ') || '(warm TSP index to resolve)'}`;
+        };
+
+        const eidasText = (s) => {
+            const e = s.Eidas || {};
+
+            return `Layer ${s.depth} - ${s.Signer.CN}\n`
+                + `${e.assessment}\n`
+                + `verified=${!!e.verified} qualified=${!!e.qualified} qscd=${!!e.qscd} types=${(e.types || []).join('/') || '-'}\n`
+                + `issuerQualifiedService=${!!e.issuerQualifiedService} serviceGranted=${!!e.serviceGranted}`;
+        };
+
+        CP7M.addEventListener('cp7mOutput', (e) => {
             console.log(e);
-            const outputElement = document.getElementById('customOutput');
-            outputElement.innerText = '';
-            outputElement.classList.remove('bg-success', 'bg-warning');
-            (e.result.status === 0) ? outputElement.classList.add('bg-success') : outputElement.classList.add('bg-warning');
+
+            /*
+             * CreeP7M drives the busy state itself:
+             * - a 'process' event fires before each operation -> show busy (result.msg = which one);
+             * - the matching result event fires on completion -> clear busy and render.
+             * One listener, no click-ordering races.
+             */
+            if (e.subject === 'process') {
+                setBusy(e.result.msg);
+                return;
+            }
+
+            clearBusy();
+
+            const r = e.result;
+            const ok = r.status === 0;
+
+            eventOutput.innerText = `last event: ${e.subject} (status ${r.status})`;
+
             switch (e.subject) {
-                case 'details':
-                    if (e.result.status === 0)
-                        outputElement.innerText = e.result.msg.map(s =>
-                            `* Signer (layer ${s.depth}) *${JSON.stringify(s.Signer, null, 3).slice(1, -1)}* Issuer *${JSON.stringify(s.Issuer, null, 3).slice(1, -1)}`
-                        ).join('\n');
+                case 'extract':
+                    show(
+                        ok
+                            ? `Extracted innermost payload (${r.msg} layer${r.msg > 1 ? 's' : ''}) - download started`
+                            : (r.err || 'extract failed'),
+                        ok
+                    );
                     break;
+
                 case 'verify':
-                    if (e.result.status === 0)
-                        outputElement.innerText = 'all signatures verified';
-                    else
-                        outputElement.innerText = e.result.msg.map(l =>
-                            `layer ${l.depth}: ${l.status === 0 ? 'ok' : (l.err.includes(':') ? l.err.split(':').pop() : l.err)}`
-                        ).join('\n');
+                    show(
+                        ok
+                            ? 'All signature layers verified'
+                            : r.msg.map(l => `layer ${l.depth}: ${l.status === 0 ? 'ok' : clean(l.err)}`).join('\n'),
+                        ok
+                    );
                     break;
+
+                case 'details':
+                    show(
+                        ok
+                            ? r.msg.map(detailsText).join('\n--------------------\n')
+                            : 'no signer details',
+                        ok
+                    );
+                    break;
+
+                case 'timestamp':
+                    show(
+                        ok
+                            ? r.msg.map((d, i) => `signer ${i}: ${d ? d.toLocaleString() : '-'}`).join('\n')
+                            : 'no signing time',
+                        ok
+                    );
+                    break;
+
+                case 'signatures':
+                    show(`${r.msg} signature${r.msg === 1 ? '' : 's'} found (all nested layers)`, true);
+                    break;
+
                 case 'ocsp':
-                    outputElement.innerText = e.result.msg.map(o =>
-                        `layer ${o.depth}: ${o.status === 0 ? 'good' : (o.err || 'revoked/unknown')}`
-                    ).join('\n');
+                    show(
+                        r.msg.length
+                            ? r.msg.map(o => `layer ${o.depth}: ${o.status === 0 ? 'good (not revoked)' : clean(o.err) || 'revoked/unknown'}`).join('\n')
+                            : 'no OCSP data',
+                        ok
+                    );
+                    break;
+
+                case 'eidas':
+                    show(
+                        r.msg.length
+                            ? r.msg.map(eidasText).join('\n--------------------\n')
+                            : 'no signers',
+                        ok
+                    );
+                    break;
+
+                case 'index':
+                    show(
+                        ok
+                            ? 'Trusted-list issuer index built / warmed'
+                            : (r.err || 'index build failed'),
+                        ok
+                    );
+                    break;
+
+                case 'debug':
+                    show(
+                        ok
+                            ? r.msg.slice(0, 4000)
+                            : (r.err || 'debug failed'),
+                        ok
+                    );
                     break;
             }
         });
     </script>
-    <!-- Custom defined handling -->
+
+    <!-- Getters and action wiring -->
     <script>
-        const tsp_cache_date = CP7M.TSP_AGE ? CP7M.TSP_AGE.toLocaleDateString() : '';
-        document.getElementById('tsp').innerText = `Using Trusted Provider from ${CP7M.TSP_SRC}\nupdated ${tsp_cache_date}`;
-        document.getElementsByClassName('cp7m-input')[0].addEventListener('change', async (e) => {
-            const spinner = document.getElementById('customSpinner');
-            spinner.classList.remove('d-none');
-            const outputElement = document.getElementById('customOutput');
-            outputElement.innerText = '';
-            outputElement.classList.remove('bg-success', 'bg-warning');
-            if (!e.target.files[0])
+        const refreshTsp = () => {
+            const age = CP7M.TSP_AGE ? CP7M.TSP_AGE.toLocaleDateString() : '(not cached yet)';
+            document.getElementById('tsp').innerText = `Trusted list: ${CP7M.TSP_SRC}\nupdated ${age}`;
+        };
+
+        refreshTsp();
+
+        /*
+         * The spinner is driven entirely by CreeP7M's process/result events,
+         * so a click handler only guards "no file" and calls the method.
+         * catch is a safety net for a failure before the library fires any event.
+         */
+        const run = (fn) => () => {
+            if (!hasSelectedFile()) {
+                show('No p7m file selected', false);
                 return;
-            let details;
-            const v = await CP7M.verify(false);
-            spinner.classList.add('d-none');
-            if (v && v.status === 0) {
-                details = 'Verified\n*revocation not checked*';
-                outputElement.classList.add('bg-success');
             }
-            else {
-                details = v.err.includes(':') ? v.err.split(':').pop() : v.err;
-                outputElement.classList.add('bg-warning');
+
+            try {
+                fn();
+            } catch (err) {
+                clearBusy();
+                show('error: ' + (err?.message || err), false);
             }
-            const d = await CP7M.getDetails(false);
-            if (d && d.status === 0)
-                d.msg.forEach(s => {
-                    details += `\n${s.Signer.CN}\n${s.Signer.SN}\n${s.Signer.OU}\n(${s.Signer.C})\nTimestamp ${s.Timestamp ? s.Timestamp.toLocaleString() : ''}`;
-                });
-            outputElement.innerText = details;
-        })
+        };
+
+        document.getElementById('btnVerify').addEventListener('click', run(() => CP7M.verify()));
+        document.getElementById('btnDetails').addEventListener('click', run(() => CP7M.getDetails()));
+        document.getElementById('btnOcsp').addEventListener('click', run(() => CP7M.ocspVerify()));
+        document.getElementById('btnEidas').addEventListener('click', run(() => CP7M.verifyEidas()));
+        document.getElementById('btnCount').addEventListener('click', run(() => CP7M.signatureCount()));
+        document.getElementById('btnTimestamp').addEventListener('click', run(() => CP7M.getSignatureTimestamp()));
+        document.getElementById('btnDebug').addEventListener('click', run(() => CP7M.debugP7M()));
+        document.getElementById('btnIndex').addEventListener('click', run(() => CP7M.buildTspIndex()));
+
+		document.getElementById('inputFile').addEventListener('change', () => cleanUp());
+
+        /*
+         * Extract is default-bound (cp7m-extract): CreeP7M calls it and fires the
+         * process/result events itself, so here we only add the no-file hint.
+         */
+        document.querySelector('.cp7m-extract').addEventListener('click', () => {
+            if (!hasSelectedFile()) show('No p7m file selected', false);
+        });
+
+        /*
+         * cacheClear is default-bound to CreeP7M.cacheClear() (no p7m operation, no spinner).
+         */
+        document.querySelector('.cp7m-cacheClear').addEventListener('click', () => {
+            show('TSP cache cleared - reload the page for a fresh fetch', true);
+            refreshTsp();
+        });
     </script>
 </body>
 </html>

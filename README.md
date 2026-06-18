@@ -44,12 +44,12 @@ By default CreeP7M listen for 'click' events on elements with below classes
 
 ### Methods
 All methods are async and resolve to a result object (see below).
-Each fires a `cp7mOutput` event; on verify/getDetails/getSignatureTimestamp/ocspVerify
-you can pass `false` to skip it.
+Each fires a `process` event then a `cp7mOutput` result event; pass `false` as the
+`event` argument to any method to skip both.
 
 | Method | result.msg | Action |
 | ------ | ---------- | ------ |
-| extract() | layer count | peel every signature layer, download the innermost payload |
+| extract(event) | layer count | peel every signature layer, download the innermost payload |
 | verify(event) | per-layer results | verify each layer at its own signing time against TSP list |
 | getDetails(event) | signer array | Signer and Issuer details, one entry per signer across all layers |
 | getSignatureTimestamp(event) | Date array | signing time per signer |
@@ -111,6 +111,16 @@ calling it with `false`
 ```javascript
 const verifyResult = await CP7M.verify(false);
 ```
+Before doing its work each method first fires a `process` event (`subject: "process"`,
+`result.msg` = the upcoming subject, `result.status` 1000 = pending). This lets a UI show a
+busy state on `process` and clear it / render on the matching result event, from one listener
+```javascript
+CP7M.addEventListener("cp7mOutput", (e) => {
+    if (e.subject === "process") showBusy();   // e.result.msg = which operation
+    else { hideBusy(); render(e); }            // actual result
+});
+```
+The `process` event is suppressed together with its result event when a method is called with `false`.
 
 ### Notes
 + Only the first `new CreeP7M()` wires things up, later instances are no-ops while one is active; state is shared
